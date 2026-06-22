@@ -11,6 +11,7 @@
     href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap"
     rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
   <style>
     :root {
       --ink: #1f2a44;
@@ -208,7 +209,8 @@
     .field input[type=text],
     .field input[type=time],
     .field select,
-    .field input[type=number] {
+    .field input[type=number],
+    .field textarea {
       width: 100%;
       padding: 8px 10px;
       border: 1px solid var(--rule);
@@ -219,8 +221,16 @@
       color: var(--ink);
     }
 
+    .field textarea {
+      min-height: 220px;
+      resize: vertical;
+      font-family: 'IBM Plex Mono', monospace;
+      white-space: pre-wrap;
+    }
+
     .field input:focus,
-    .field select:focus {
+    .field select:focus,
+    .field textarea:focus {
       outline: none;
       border-color: var(--amber-dark);
       box-shadow: 0 0 0 3px rgba(200, 132, 42, 0.14);
@@ -1050,8 +1060,16 @@
       <!-- CONFIG EXPORT -->
       <div class="card">
         <h2>Config export</h2>
-        <p class="card-hint">Export the current timetable builder configuration as a YAML file.</p>
-        <button class="secondary" id="exportConfigYamlBtn">⇣ Export YAML config</button>
+        <p class="card-hint">Show, download, or import your current builder configuration in YAML format.</p>
+        <div class="btnrow" style="flex-wrap: wrap; gap: 8px;">
+          <button class="secondary" id="showConfigYamlBtn">⇣ Show YAML</button>
+          <button class="secondary" id="downloadConfigYamlBtn">⇣ Download YAML</button>
+          <button class="secondary" id="importConfigYamlBtn">⇡ Import YAML</button>
+        </div>
+        <div class="field" style="margin-top: 14px;">
+          <label for="configYamlTextarea">YAML configuration</label>
+          <textarea id="configYamlTextarea" placeholder="YAML config appears here when you export. Paste YAML here to import."></textarea>
+        </div>
       </div>
 
       <!-- GENERATE -->
@@ -2449,46 +2467,40 @@ Hindi/Telugu,Sukrutha,9,5 periods`;
       }
 
       // ---- YAML EXPORT ----
-      function formatYamlScalar(value) {
-        if (typeof value === "string") {
-          if (value === "") return '""';
-          return /[\n:\-\?\,\[\]\{\}&\*#\!\|\>\'\"\s]/.test(value)
-            ? JSON.stringify(value)
-            : value;
-        }
-        if (typeof value === "boolean") return value ? "true" : "false";
-        return String(value);
+      function downloadYamlFile(filename, content) {
+        const blob = new Blob([content], { type: "text/yaml;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
       }
 
-      function encodeYaml(value, indent = 0) {
-        const pad = "  ".repeat(indent);
-        if (Array.isArray(value)) {
-          if (value.length === 0) return "[]";
-          return value.map(item => {
-            if (item !== null && typeof item === "object") {
-              const nested = encodeYaml(item, indent + 1);
-              return `${pad}- ${nested.startsWith("\n") ? nested.slice(1) : nested}`;
-            }
-            return `${pad}- ${formatYamlScalar(item)}`;
-          }).join("\n");
-        }
-        if (value && typeof value === "object") {
-          const keys = Object.keys(value);
-          if (keys.length === 0) return "{}";
-          return keys.map(key => {
-            const item = value[key];
-            if (item === null || item === undefined) return `${pad}${key}: null`;
-            if (Array.isArray(item)) {
-              if (item.length === 0) return `${pad}${key}: []`;
-              return `${pad}${key}:\n${encodeYaml(item, indent + 1)}`;
-            }
-            if (typeof item === "object") {
-              return `${pad}${key}:\n${encodeYaml(item, indent + 1)}`;
-            }
-            return `${pad}${key}: ${formatYamlScalar(item)}`;
-          }).join("\n");
-        }
-        return `${pad}${formatYamlScalar(value)}`;
+      function exportConfigYaml() {
+        const yaml = jsyaml.dump(getConfigForExport(), { noRefs: true });
+        downloadYamlFile("timetable-builder-config.yaml", yaml);
+      }
+
+      function getConfigYamlText() {
+        return jsyaml.dump(getConfigForExport(), { noRefs: true });
+      }
+
+      function showConfigYaml() {
+        document.getElementById("configYamlTextarea").value = getConfigYamlText();
+      }
+
+      function downloadConfigYaml() {
+        let yaml = document.getElementById("configYamlTextarea").value.trim();
+        if (!yaml) yaml = getConfigYamlText();
+        if (!yaml) { alert("No configuration available to download."); return; }
+        downloadYamlFile("timetable-builder-config.yaml", yaml);
+      }
+
+      function parseYaml(text) {
+        return jsyaml.load(text);
       }
 
       function getConfigForExport() {
@@ -2510,21 +2522,86 @@ Hindi/Telugu,Sukrutha,9,5 periods`;
         };
       }
 
-      function downloadYamlFile(filename, content) {
-        const blob = new Blob([content], { type: "text/yaml;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+      function applyExportConfig(config) {
+        if (!config || typeof config !== "object") {
+          alert("Invalid YAML config.");
+          return;
+        }
+
+        if (config.instName !== undefined) state.instName = String(config.instName || "");
+        if (config.ttTitle !== undefined) state.ttTitle = String(config.ttTitle || "");
+        if (Array.isArray(config.days)) {
+          const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+          state.days = DAY_NAMES.map(day => config.days.includes(day));
+        }
+        if (config.startTime !== undefined) state.startTime = String(config.startTime || "09:00");
+        if (config.periodDur !== undefined) state.periodDur = Number(config.periodDur) || 40;
+        if (config.periodsPerDay !== undefined) state.periodsPerDay = Number(config.periodsPerDay) || 6;
+        if (config.breakAfter !== undefined) state.breakAfter = Number(config.breakAfter) || 2;
+        if (config.breakDur !== undefined) state.breakDur = Number(config.breakDur) || 15;
+        if (config.minFreePerDay !== undefined) state.minFreePerDay = Number(config.minFreePerDay) || 1;
+        if (config.maxFreePerDay !== undefined) state.maxFreePerDay = Number(config.maxFreePerDay) || 2;
+
+        if (config.classes && typeof config.classes === "object") {
+          state.classes = {};
+          Object.keys(config.classes).forEach(key => {
+            const classKey = Number(key);
+            if (!Number.isNaN(classKey) && classKey >= 1 && classKey <= 10) {
+              state.classes[classKey] = Number(config.classes[key]) || 0;
+            }
+          });
+        }
+
+        if (Array.isArray(config.importedTeachers)) state.importedTeachers = config.importedTeachers.map(item => ({
+          subject: item.subject || "",
+          teacher: item.teacher || "",
+          classes: Array.isArray(item.classes) ? item.classes.map(String) : [],
+          periodsPerWeek: Number(item.periodsPerWeek || item.periods || 0)
+        }));
+
+        if (Array.isArray(config.combinedSessions)) state.combinedSessions = config.combinedSessions.map(item => ({
+          id: item.id || state.nextId++,
+          subject: item.subject || "",
+          teacher: item.teacher || "",
+          sections: Array.isArray(item.sections) ? item.sections.map(String) : [],
+          periodsPerWeek: Number(item.periodsPerWeek || item.periods || 0)
+        }));
+
+        if (config.labBlocks && typeof config.labBlocks === "object") {
+          state.labBlocks = {
+            subject: String(config.labBlocks.subject || ""),
+            pairs: Array.isArray(config.labBlocks.pairs) ? config.labBlocks.pairs.map(pair => Array.isArray(pair) ? pair.map(Number) : []).filter(pair => pair.length === 2) : [],
+            groups: Array.isArray(config.labBlocks.groups) ? config.labBlocks.groups : []
+          };
+        }
+
+        deriveClassSubjects();
+        state.grids = {};
+        state.activeTab = getSections()[0] || "";
+        save();
+        renderDayGrid();
+        renderClassGrid();
+        renderCombinedSessions();
+        ensureLabBlocks();
+        renderLabPairsPicker();
+        renderLabGroups();
+        renderAll();
       }
 
-      function exportConfigYaml() {
-        const yaml = encodeYaml(getConfigForExport());
-        downloadYamlFile("timetable-builder-config.yaml", yaml);
+      function importConfigYaml() {
+        const text = document.getElementById("configYamlTextarea").value.trim();
+        if (!text) {
+          alert("Paste YAML into the textarea before importing.");
+          return;
+        }
+        try {
+          const parsed = parseYaml(text);
+          applyExportConfig(parsed);
+          alert("YAML configuration imported successfully.");
+        } catch (err) {
+          alert("Could not parse YAML config. Check the syntax and try again.");
+          console.error(err);
+        }
       }
 
       // ---- BIND CONTROLS ----
@@ -2574,6 +2651,12 @@ Hindi/Telugu,Sukrutha,9,5 periods`;
         });
         document.getElementById("printBtn").addEventListener("click", () => window.print());
         document.getElementById("csvBtn").addEventListener("click", exportCSV);
+        const showYamlBtn = document.getElementById("showConfigYamlBtn");
+        const downloadYamlBtn = document.getElementById("downloadConfigYamlBtn");
+        const importYamlBtn = document.getElementById("importConfigYamlBtn");
+        if (showYamlBtn) showYamlBtn.addEventListener("click", showConfigYaml);
+        if (downloadYamlBtn) downloadYamlBtn.addEventListener("click", downloadConfigYaml);
+        if (importYamlBtn) importYamlBtn.addEventListener("click", importConfigYaml);
       }
 
       // Fully restore `state` to its pristine defaults and re-render every part of the UI.
