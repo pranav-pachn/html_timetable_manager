@@ -1377,11 +1377,11 @@ Return CSV now.`;
             
             mappings.forEach(mapping => {
                 const row = [
-                    escapeHtml(mapping.teacherId || ''),
-                    escapeHtml(mapping.gradeSection || ''),
-                    escapeHtml(mapping.subject || ''),
-                    escapeHtml(mapping.periodsPerWeek || ''),
-                    escapeHtml(mapping.fixedPeriods || '')
+                    escapeCsvField(mapping.teacherId || ''),
+                    escapeCsvField(mapping.gradeSection || ''),
+                    escapeCsvField(mapping.subject || ''),
+                    escapeCsvField(mapping.periodsPerWeek || ''),
+                    escapeCsvField(mapping.fixedPeriods || '')
                 ];
                 csvRows.push(row.join(','));
             });
@@ -1396,6 +1396,15 @@ Return CSV now.`;
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+        }
+
+        function escapeCsvField(value) {
+            const cleaned = toCleanString(value);
+            // Quote field if it contains comma, quote, or newline
+            if (cleaned.includes(',') || cleaned.includes('"') || cleaned.includes('\n')) {
+                return `"${cleaned.replace(/"/g, '""')}"`;
+            }
+            return cleaned;
         }
         
         // Render holidays list
