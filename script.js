@@ -613,10 +613,14 @@
             if (!hiddenSection) return;
             if (!selected) {
                 hiddenSection.value = '';
+                // Ensure classTeacherGrade field is cleared as well
+                select.value = '';
                 return;
             }
             const [gradePart, sectionPart] = selected.split('|');
+            // Update hidden section input
             hiddenSection.value = sectionPart || '';
+            // Preserve combined value in the select for proper rendering
             select.value = `${gradePart}|${hiddenSection.value}`;
         }
 
@@ -666,6 +670,33 @@
             updateClassFilters();
             renderAIPrompt();
             alert("Local setup data saved.");
+        }
+
+        // Save master data without showing an alert (used by add row functions)
+        function saveMasterDataFromTablesWithoutAlert() {
+            syncConfigFromInputs();
+            state.teachers = readTableRows('teacherMasterTable', ['id', 'name', 'classTeacherSubject', 'classTeacherGrade', 'classTeacherSection', 'phone', 'email'])
+                .map(normalizeTeacherGradeSection)
+                .filter(teacher => teacher.name);
+            state.teacherMappings = readTableRows('teacherMappingTable', ['teacherId', 'teacherName', 'gradeSection', 'subject', 'periodsPerWeek'])
+                .map((mapping, index) => ({
+                    ...mapping,
+                    id: `M${index + 1}`,
+                    teacherName: mapping.teacherName || findTeacherNameById(mapping.teacherId),
+                    gradeSection: normalizeClassSectionLabel(mapping.gradeSection)
+                }))
+                .filter(mapping => mapping.gradeSection && mapping.subject && (mapping.teacherId || mapping.teacherName));
+            rebuildTeacherSubjectMapFromMasterData();
+            saveMasterDataToStorage();
+            saveTeacherSubjectMapToStorage();
+            const updatedPeriods = autoFillMissingSubjectsFromTeacherMap();
+            if (updatedPeriods > 0) saveTimetableToStorage();
+            renderTeacherMasterTable();
+            renderTeacherMappingTable();
+            updateSetupSummary();
+            updateClassFilters();
+            renderAIPrompt();
+            // No alert here
         }
 
         function addTeacherRow() {
