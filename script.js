@@ -123,13 +123,9 @@
                 try {
                     const parsedSubjects = JSON.parse(storedSubjects) || [];
                     state.subjects = (parsedSubjects || [])
-                        .map(item => {
-                            if (typeof item === 'string') return { code: toCleanString(item), name: toCleanString(item) };
-                            if (item && typeof item === 'object') return { code: toCleanString(item.code || item.name), name: toCleanString(item.name || item.code) };
-                            return null;
-                        })
-                        .filter(s => s && s.code)
-                        .sort((a, b) => safeLocaleCompare(a.code, b.code));
+                        .map(item => toCleanString(item))
+                        .filter(Boolean)
+                        .sort((a, b) => safeLocaleCompare(a, b));
                 } catch(e) {
                     state.subjects = [];
                 }
@@ -585,7 +581,7 @@
                                 <select data-field="subject">
                                     <option value=""></option>
                                     ${subjectOptions.map(option => `
-                                        <option value="${escapeHtml(option.code)}"${option.code === subjectValue ? ' selected' : ''}>${escapeHtml(option.code)} - ${escapeHtml(option.name)}</option>
+                                        <option value="${escapeHtml(option)}"${option === subjectValue ? ' selected' : ''}>${escapeHtml(option)}</option>
                                     `).join('')}
                                 </select>
                             </td>
@@ -753,12 +749,11 @@
             if (!table) return;
             const rows = state.subjects || [];
             table.innerHTML = `
-                <thead><tr><th>Subject Code</th><th>Subject Name</th><th>Action</th></tr></thead>
+                <thead><tr><th>Subject</th><th>Action</th></tr></thead>
                 <tbody>
                     ${rows.map((subject, i) => `
                         <tr data-index="${i}">
-                            <td>${escapeHtml(subject.code)}</td>
-                            <td>${escapeHtml(subject.name)}</td>
+                            <td>${escapeHtml(subject)}</td>
                             <td><button class="btn btn-danger btn-sm" onclick="deleteSubject(${i})"><i class="fas fa-trash"></i></button></td>
                         </tr>
                     `).join('')}
@@ -767,32 +762,18 @@
         }
 
         function getSubjectOptions() {
-            return (state.subjects || []).slice().sort((a, b) => safeLocaleCompare(a.code, b.code));
+            return (state.subjects || []).slice().sort((a, b) => safeLocaleCompare(a, b));
         }
 
         function generateSubjectsFromInput() {
             const input = document.getElementById('bulkSubjectsInput');
             if (!input) return;
             const lines = input.value.split(/\r?\n/).map(l => toCleanString(l)).filter(Boolean);
-            const uniques = new Map();
-            (state.subjects || []).forEach(s => uniques.set(toCleanString(s.code), s));
-            
-            lines.forEach(line => {
-                const parts = line.split(/[,:]/);
-                let code = toCleanString(parts[0]);
-                let name = parts.length > 1 ? toCleanString(parts.slice(1).join(line.includes(',') ? ',' : ':')) : code;
-                
-                if (code.length > name.length && name.length > 0) {
-                    const tmp = code;
-                    code = name;
-                    name = tmp;
-                }
-                
-                if (code) {
-                    uniques.set(code, { code, name });
-                }
+            const uniques = new Set((state.subjects || []).map(s => toCleanString(s)));
+            lines.forEach(subject => {
+                if (subject) uniques.add(subject);
             });
-            state.subjects = Array.from(uniques.values()).sort((a, b) => safeLocaleCompare(a.code, b.code));
+            state.subjects = Array.from(uniques).sort((a, b) => safeLocaleCompare(a, b));
             saveMasterDataToStorage();
             renderSubjectsTable();
             alert('Generated ' + lines.length + ' subject entries.');
@@ -805,10 +786,18 @@
             renderSubjectsTable();
         }
 
+        function deleteSubject(index) {
+            state.subjects = state.subjects || [];
+            if (index < 0 || index >= state.subjects.length) return;
+            state.subjects.splice(index, 1);
+            saveMasterDataToStorage();
+            renderSubjectsTable();
+        }
+
         function exportSubjectsCSV() {
             const rows = state.subjects || [];
             if (rows.length === 0) { alert('No subjects to export.'); return; }
-            const csv = 'Subject Code,Subject Name\n' + rows.map(s => `${escapeCSVField(s.code)},${escapeCSVField(s.name)}`).join('\n');
+            const csv = 'Subject\n' + rows.map(escapeCSVField).join('\n');
             const blob = new Blob([csv], { type: 'text/csv' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -831,57 +820,21 @@
                         alert('Empty or invalid CSV');
                         return;
                     }
-                    
                     let start = 0;
-                    let cIdx = 0;
-                    let nIdx = 1;
-
                     const header = rows[0].map(c => toCleanString(c).toLowerCase());
-                    const codeMatch = header.findIndex(h => h.includes('code') || h === 'subject');
-                    const nameMatch = header.findIndex(h => h.includes('name'));
-
-                    if (codeMatch >= 0 || nameMatch >= 0) {
-                        start = 1;
-                        cIdx = Math.max(0, codeMatch);
-                        nIdx = nameMatch >= 0 ? nameMatch : (rows[0].length > 1 ? (cIdx === 0 ? 1 : 0) : cIdx);
-                    } else if (rows[0] && rows[0].length > 1) {
-                        // No headers detected. Guess by length: Subject Codes are usually shorter than Subject Names.
-                        const len0 = toCleanString(rows[0][0]).length;
-                        const len1 = toCleanString(rows[0][1]).length;
-                        if (len0 > len1) {
-                            cIdx = 1;
-                            nIdx = 0;
-                        } else {
-                            cIdx = 0;
-                            nIdx = 1;
-                        }
-                    }
-
+                    if (header.includes('subject')) start = 1;
                     const parsed = [];
                     for (let i = start; i < rows.length; i++) {
-                        if (!rows[i] || rows[i].length === 0) continue;
-                        let code = toCleanString(rows[i][cIdx] || '');
-                        let name = toCleanString(rows[i][nIdx] || code);
-                        
-                        // Smart swap: Subject Codes are typically shorter than Names.
-                        // If code is longer than name, they are likely swapped.
-                        if (code.length > name.length && name.length > 0) {
-                            const tmp = code;
-                            code = name;
-                            name = tmp;
-                        }
-                        
-                        if (code) parsed.push({ code, name });
+                        const val = toCleanString(rows[i][0] || '');
+                        if (val) parsed.push(val);
                     }
-                    
                     if (parsed.length === 0) {
                         alert('No valid subject rows found in CSV.');
                         return;
                     }
-                    const uniques = new Map();
-                    (state.subjects || []).forEach(s => uniques.set(toCleanString(s.code), s));
-                    parsed.forEach(s => uniques.set(s.code, s));
-                    state.subjects = Array.from(uniques.values()).sort((a, b) => safeLocaleCompare(a.code, b.code));
+                    const uniques = new Set((state.subjects || []).map(s => toCleanString(s)));
+                    parsed.forEach(subject => uniques.add(subject));
+                    state.subjects = Array.from(uniques).sort((a, b) => safeLocaleCompare(a, b));
                     saveMasterDataToStorage();
                     renderSubjectsTable();
                     alert('Imported ' + parsed.length + ' subject rows.');
@@ -1001,7 +954,8 @@
 
         function saveMasterDataFromTablesWithoutAlert() {
             syncConfigFromInputs();
-            state.teachers = readTableRows('teacherMasterTable', ['id', 'name', 'classTeacherSubject', 'classTeacherGrade', 'classTeacherSection', 'phone', 'email']);
+            state.teachers = readTableRows('teacherMasterTable', ['id', 'name', 'classTeacherSubject', 'classTeacherGrade', 'classTeacherSection', 'phone', 'email'])
+                .map(normalizeTeacherGradeSection);
             state.teacherMappings = readTableRows('teacherMappingTable', ['teacherId', 'teacherName', 'gradeSection', 'subject', 'periodsPerWeek']);
         }
 
@@ -1214,6 +1168,13 @@ Return CSV now.`;
         
         // Format date for display
         function formatDate(dateString) {
+            if (!dateString) return '';
+            const parts = dateString.split('-');
+            if (parts.length === 3) {
+                // Parse date string in local timezone to avoid UTC shifting
+                const date = new Date(parts[0], parts[1] - 1, parts[2]);
+                return date.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+            }
             const date = new Date(dateString);
             return date.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
         }
@@ -1266,6 +1227,7 @@ Return CSV now.`;
                 renderHolidays();
             }
         }
+        window.deleteHoliday = deleteHoliday;
         
         // Export holidays
         function exportHolidays() {
@@ -1669,7 +1631,7 @@ Return CSV now.`;
             
             // Store period count for time input
             state.tempPeriodCount = numPeriods;
-            state.tempCSVData = [];
+            state.tempCSVData = {};
             
             // Process each data line
             for (let i = 1; i < lines.length; i++) {
