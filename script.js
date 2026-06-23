@@ -659,7 +659,7 @@
             const options = sections.map(item => {
                 const classValue = item.class || '';
                 const sectionValue = item.section || '';
-                const label = `${classValue}-${sectionValue}`;
+                const label = normalizeClassSectionLabel(`${classValue}-${sectionValue}`);
                 const value = `${classValue}|${sectionValue}`;
                 return { label, value };
             });
@@ -1788,25 +1788,25 @@ Return CSV now.`;
             // Handle hyphenated format without GRADE prefix (e.g., "I-A", "10-A")
             const hyphenMatchNoPrefix = hyphenated.match(/^([IVX]+|\d+)-([A-Z])$/i);
             if (hyphenMatchNoPrefix) {
-                return `Grade-${hyphenMatchNoPrefix[1].toUpperCase()}-${hyphenMatchNoPrefix[2].toUpperCase()}`;
+                return `Grade-${hyphenMatchNoPrefix[1]}-${hyphenMatchNoPrefix[2]}`;
             }
             
             // Handle hyphenated format with GRADE prefix (e.g., "GRADE-I-A", "Grade-I-A")
             const hyphenMatch = hyphenated.match(/^GRADE-?([IVX]+|\d+)-([A-Z])$/i);
             if (hyphenMatch) {
-                return `Grade-${hyphenMatch[1].toUpperCase()}-${hyphenMatch[2].toUpperCase()}`;
+                return `Grade-${hyphenMatch[1]}-${hyphenMatch[2]}`;
             }
 
-            const raw = cleaned.toUpperCase();
+            const raw = cleaned;
             
             const compact = raw.replace(/\s+/g, '');
-            const match = compact.match(/^(?:GRADE)?([IVX]+|\d+)([A-Z])$/);
+            const match = compact.match(/^(?:GRADE)?([IVX]+|\d+)([A-Z])$/i);
             if (match) {
                 return `Grade-${match[1]}-${match[2]}`;
             }
             
             const parts = raw.split(/\s+/).filter(Boolean);
-            if (parts.length >= 3 && parts[0] === 'GRADE') {
+            if (parts.length >= 3 && parts[0].toUpperCase() === 'GRADE') {
                 return `Grade-${parts[1]}-${parts[2]}`;
             }
             if (parts.length >= 2) {
