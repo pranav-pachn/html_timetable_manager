@@ -341,6 +341,7 @@
                 updateTimetableSummary();
                 renderTimetable();
             }
+            updateClassFilters();
         }
 
         function syncConfigInputs() {
@@ -1638,6 +1639,7 @@ Return CSV now.`;
             // Update UI
             updateTimetableSummary();
             renderTimetable();
+            updateClassFilters();
             
             // Show upload status
             document.getElementById('uploadStatus').style.display = 'block';
