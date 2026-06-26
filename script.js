@@ -58,9 +58,14 @@
             const storedTeacherMappings = localStorage.getItem('teacherGradeSubjectMappings');
             const storedConfig = localStorage.getItem('timetableConfig');
             const storedClassSections = localStorage.getItem('classSections');
-            
+            let parsedTimetable = null;
+
             if (storedTimetable) {
-                state.timetableData = JSON.parse(storedTimetable);
+                try {
+                    parsedTimetable = JSON.parse(storedTimetable);
+                } catch (e) {
+                    parsedTimetable = null;
+                }
             }
             
             if (storedHolidays) {
@@ -140,6 +145,24 @@
                     ...state.config,
                     ...JSON.parse(storedConfig)
                 };
+            }
+
+            // Normalize timetable after config is loaded so period/day counts are correct.
+            if (parsedTimetable) {
+                state.timetableData = normalizeLoadedTimetableData(parsedTimetable);
+                if (!state.timetableData) {
+                    console.warn('Ignoring invalid schoolTimetable data in localStorage.');
+                } else if (state.timetableData !== parsedTimetable) {
+                    saveTimetableToStorage();
+                }
+            }
+
+            // Remove obsolete parallel keys written by earlier generator versions.
+            try {
+                localStorage.removeItem('generatedTimetable');
+                localStorage.removeItem('generatedTimetableUnscheduled');
+            } catch (e) {
+                // Ignore storage cleanup failures in restricted browser modes.
             }
         }
         
@@ -226,6 +249,7 @@
             if (importSubjectsInput) importSubjectsInput.addEventListener('change', handleImportSubjectsCSV);
             document.getElementById('saveMasterDataBtn').addEventListener('click', saveMasterDataFromTables);
             document.getElementById('downloadDataTemplatesBtn').addEventListener('click', downloadMasterDataTemplates);
+            createGenerateButton();
             document.getElementById('generatePromptBtn').addEventListener('click', renderAIPrompt);
             document.getElementById('copyPromptBtn').addEventListener('click', copyAIPrompt);
             document.getElementById('downloadPromptBtn').addEventListener('click', downloadAIPrompt);
@@ -334,12 +358,15 @@
             
             // If timetable data exists, show it
             if (state.timetableData) {
-                const updatedPeriods = autoFillMissingSubjectsFromTeacherMap();
-                if (updatedPeriods > 0) {
-                    saveTimetableToStorage();
+                state.timetableData = normalizeLoadedTimetableData(state.timetableData);
+                if (state.timetableData) {
+                    const updatedPeriods = autoFillMissingSubjectsFromTeacherMap();
+                    if (updatedPeriods > 0) {
+                        saveTimetableToStorage();
+                    }
+                    updateTimetableSummary();
+                    renderTimetable();
                 }
-                updateTimetableSummary();
-                renderTimetable();
             }
             updateClassFilters();
         }
@@ -1823,6 +1850,1151 @@ Return CSV now.`;
                 ? state.config.schoolDays
                 : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
         }
+
+        /** True when a class entry matches the canonical days/periods structure. */
+        function isValidTimetableClassData(classData) {
+            if (!classData || typeof classData !== 'object' || !Array.isArray(classData.days)) {
+                return false;
+            }
+
+            return classData.days.every(day =>
+                day &&
+                typeof day.dayName === 'string' &&
+                Array.isArray(day.periods) &&
+                day.periods.every(period => period && typeof period.period === 'number')
+            );
+        }
+
+        /** Detect older generator output shaped as { Monday: { P1: {...} } }. */
+        function isLegacyFlatTimetableEntry(classData) {
+            if (!classData || typeof classData !== 'object' || Array.isArray(classData.days)) {
+                return false;
+            }
+
+            const standardDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+            return Object.keys(classData).some(key => standardDays.includes(key));
+        }
+
+        /** Convert legacy flat timetable entries into the canonical app structure. */
+        function migrateLegacyFlatTimetableEntry(className, classData) {
+            const schoolDays = getStandardDayOrder();
+            const periodsPerDay = state.config.periodsPerDay || 8;
+
+            return {
+                className,
+                days: schoolDays.map(dayName => ({
+                    dayName,
+                    periods: Array.from({ length: periodsPerDay }, (_, index) => {
+                        const periodNumber = index + 1;
+                        const periodKey = `P${periodNumber}`;
+                        const slot = classData[dayName] && classData[dayName][periodKey];
+                        return {
+                            period: periodNumber,
+                            subject: slot ? toCleanString(slot.subject) : '',
+                            teacherName: slot ? toCleanString(slot.teacherName || slot.teacher) : '',
+                            teacherId: slot ? toCleanString(slot.teacherId) : '',
+                            time: getPeriodTime(periodNumber),
+                            type: 'Regular',
+                            breakAfter: 0
+                        };
+                    })
+                }))
+            };
+        }
+
+        /**
+         * Accept canonical timetable data as-is, migrate legacy flat data, or reject invalid blobs.
+         * Keeps View/Modify/Teacher Schedule tabs from crashing on old localStorage values.
+         */
+        function normalizeLoadedTimetableData(data) {
+            if (!data || typeof data !== 'object') return null;
+
+            const classNames = Object.keys(data);
+            if (classNames.length === 0) return null;
+
+            const normalized = {};
+            let changed = false;
+
+            classNames.forEach(className => {
+                const classData = data[className];
+                if (isValidTimetableClassData(classData)) {
+                    normalized[className] = classData;
+                    return;
+                }
+
+                if (isLegacyFlatTimetableEntry(classData)) {
+                    normalized[className] = migrateLegacyFlatTimetableEntry(className, classData);
+                    changed = true;
+                    return;
+                }
+
+                changed = true;
+            });
+
+            if (Object.keys(normalized).length === 0) return null;
+
+            if (changed) {
+                return normalized;
+            }
+
+            return data;
+        }
+
+        // --- Generate Timetable (greedy scheduler) ---
+
+        let teacherBusyTracker = {};
+        let teacherLoadTracker = {};
+        let currentUnscheduledList = [];
+
+        /** Wire the Generate Timetable button in the Setup tab. */
+        function createGenerateButton() {
+            const btn = document.getElementById('generateTimetableBtn');
+            if (!btn) return;
+            btn.addEventListener('click', function() {
+                syncSetupStateFromTablesForGeneration();
+                generateTimetable();
+            });
+        }
+
+        /** Read latest Setup tab values into state before scheduling. */
+        function syncSetupStateFromTablesForGeneration() {
+            syncConfigFromInputs();
+            mergeBulkClassSectionsFromInput();
+
+            const previousFixedPeriods = new Map();
+            (state.teacherMappings || []).forEach(mapping => {
+                const key = [
+                    toCleanString(mapping.teacherId),
+                    toCleanString(mapping.gradeSection),
+                    toCleanString(mapping.subject)
+                ].join('|').toLowerCase();
+                const fixed = toCleanString(mapping.fixedPeriods);
+                if (fixed) previousFixedPeriods.set(key, fixed);
+            });
+
+            state.teachers = readTableRows('teacherMasterTable', ['id', 'name', 'classTeacherSubject', 'classTeacherGrade', 'classTeacherSection', 'phone', 'email'])
+                .map(normalizeTeacherGradeSection)
+                .filter(teacher => toCleanString(teacher.name));
+
+            state.teacherMappings = readTableRows('teacherMappingTable', ['teacherId', 'gradeSection', 'subject', 'periodsPerWeek', 'fixedPeriods'])
+                .map((mapping, index) => {
+                    const lookupKey = [
+                        toCleanString(mapping.teacherId),
+                        parseGradeSectionParts(mapping.gradeSection)
+                            .map(part => normalizeClassSectionLabel(part))
+                            .filter(Boolean)
+                            .join(','),
+                        toCleanString(mapping.subject)
+                    ].join('|').toLowerCase();
+                    const tableFixed = toCleanString(mapping.fixedPeriods);
+                    const fixedPeriods = tableFixed || previousFixedPeriods.get(lookupKey) || '';
+
+                    return {
+                        ...mapping,
+                        id: mapping.id || `M${index + 1}`,
+                        teacherId: toCleanString(mapping.teacherId),
+                        teacherName: findTeacherNameById(mapping.teacherId),
+                        subject: (() => {
+                            const validation = validateSubjectSelection(mapping.subject);
+                            return validation.valid ? validation.normalized : toCleanString(mapping.subject);
+                        })(),
+                        periodsPerWeek: Math.max(0, Number(mapping.periodsPerWeek) || 0),
+                        gradeSection: parseGradeSectionParts(mapping.gradeSection)
+                            .map(part => normalizeClassSectionLabel(part))
+                            .filter(Boolean)
+                            .join(','),
+                        fixedPeriods
+                    };
+                })
+                .filter(mapping => mapping.gradeSection && mapping.subject && mapping.teacherId && mapping.periodsPerWeek > 0);
+        }
+
+        /** Parse bulk class input (if present) and merge into state.classSections. */
+        function mergeBulkClassSectionsFromInput() {
+            const input = document.getElementById('bulkClassesInput');
+            if (!input || !toCleanString(input.value)) return;
+
+            const lines = input.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+            const parsed = parseBulkClassesInput(lines);
+            if (parsed.length === 0) return;
+
+            const mergedMap = new Map();
+            (state.classSections || []).forEach(item => {
+                if (item && item.className) mergedMap.set(item.className, item);
+            });
+            parsed.forEach(item => {
+                if (item && item.className) mergedMap.set(item.className, item);
+            });
+            state.classSections = Array.from(mergedMap.values()).sort((a, b) => safeLocaleCompare(a.className, b.className));
+        }
+
+        /** Map Grade-10-A / 10-A labels to Class-10-A keys used by state.timetableData. */
+        function mappingGradeSectionToClassName(gradeSectionLabel) {
+            const normalized = normalizeClassSectionLabel(gradeSectionLabel);
+            const gradeMatch = normalized.match(/^Grade-([IVX\d]+)-([A-Z])$/i);
+            if (gradeMatch) return `Class-${gradeMatch[1]}-${gradeMatch[2]}`;
+
+            const classMatch = toCleanString(gradeSectionLabel).match(/^Class-([IVX\d]+)-([A-Z])$/i);
+            if (classMatch) return `Class-${classMatch[1]}-${classMatch[2]}`;
+
+            const compact = toCleanString(gradeSectionLabel).replace(/^Grade-?/i, '').replace(/^Class-?/i, '');
+            const hyphenMatch = compact.match(/^([IVX\d]+)-([A-Z])$/i);
+            if (hyphenMatch) return `Class-${hyphenMatch[1]}-${hyphenMatch[2]}`;
+
+            return toCleanString(gradeSectionLabel);
+        }
+
+        /** Look up a single period entry inside the canonical timetable shape. */
+        function getClassDayPeriod(timetable, className, dayName, periodNumber) {
+            const classData = timetable[className];
+            if (!classData || !Array.isArray(classData.days)) return null;
+
+            const dayData = classData.days.find(day => day.dayName === dayName);
+            if (!dayData || !Array.isArray(dayData.periods)) return null;
+
+            return dayData.periods.find(period => period.period === periodNumber) || null;
+        }
+
+        /** True when a period cell has not yet been assigned subject/teacher data. */
+        function isPeriodSlotEmpty(periodEntry) {
+            if (!periodEntry) return false;
+            return !toCleanString(periodEntry.subject) &&
+                !toCleanString(periodEntry.teacherId) &&
+                !toCleanString(periodEntry.teacherName);
+        }
+
+        /**
+         * Build an empty timetable in the same shape used across the app:
+         * state.timetableData[className] = { className, days: [{ dayName, periods: [...] }] }
+         */
+        function createEmptyTimetable() {
+            const schoolDays = getStandardDayOrder();
+            const periodsPerDay = state.config.periodsPerDay || 8;
+            const timetable = {};
+            const classNameSet = new Set();
+
+            (state.classSections || []).forEach(item => {
+                if (!item) return;
+                if (item.className) {
+                    classNameSet.add(item.className);
+                } else if (item.class && item.section) {
+                    classNameSet.add(`Class-${item.class}-${item.section}`);
+                }
+            });
+
+            (state.teacherMappings || []).forEach(mapping => {
+                parseGradeSectionParts(mapping.gradeSection)
+                    .flatMap(part => resolveMappingToClassNames(part))
+                    .forEach(className => classNameSet.add(className));
+            });
+
+            classNameSet.forEach(className => {
+                timetable[className] = {
+                    className,
+                    days: schoolDays.map(dayName => ({
+                        dayName,
+                        periods: Array.from({ length: periodsPerDay }, (_, index) => ({
+                            period: index + 1,
+                            subject: '',
+                            teacherName: '',
+                            teacherId: '',
+                            time: getPeriodTime(index + 1),
+                            type: 'Regular',
+                            breakAfter: 0
+                        }))
+                    }))
+                };
+            });
+
+            return timetable;
+        }
+
+        function resetGenerationTrackers() {
+            teacherBusyTracker = {};
+            teacherLoadTracker = {};
+            classDailySubjectCount = {};
+        }
+
+        // Tracks how many times each subject appears per class per day (for spread constraint).
+        let classDailySubjectCount = {};
+
+        /** Normalize subject to canonical code (PT, CSC, SOC, etc.). */
+        function normalizeSubjectCode(subject) {
+            const cleaned = toCleanString(subject);
+            if (!cleaned) return '';
+
+            const options = getSubjectOptions() || [];
+            const found = options.find(item =>
+                safeLocaleCompare(item.code, cleaned) === 0 ||
+                safeLocaleCompare(item.name, cleaned) === 0
+            );
+            return found ? found.code : cleaned.toUpperCase();
+        }
+
+        function isCscSubject(subject) {
+            return normalizeSubjectCode(subject) === 'CSC';
+        }
+
+        /** Split mapping grade-section cells on comma or semicolon (CSV uses both). */
+        function parseGradeSectionParts(gradeSectionStr) {
+            return toCleanString(gradeSectionStr)
+                .split(/[,;]/)
+                .map(part => part.trim())
+                .filter(Boolean);
+        }
+
+        /**
+         * Resolve a mapping grade-section label to Class-* keys in state.timetableData.
+         * Handles Grade-VII-A, Class-VII-A, and grade-only labels like Grade-VII.
+         */
+        function resolveMappingToClassNames(gradeSectionLabel) {
+            const label = toCleanString(gradeSectionLabel);
+            if (!label) return [];
+
+            const withSection = mappingGradeSectionToClassName(label);
+            if (/^Class-[IVX\d]+-[A-Z]$/i.test(withSection)) {
+                return [withSection];
+            }
+
+            const gradeOnlyPatterns = [
+                label.match(/^Grade-([IVX\d]+)$/i),
+                normalizeClassSectionLabel(label).match(/^Grade-([IVX\d]+)$/i),
+                withSection.match(/^Grade-([IVX\d]+)$/i),
+                label.match(/^([IVX\d]+)$/i)
+            ];
+
+            for (const match of gradeOnlyPatterns) {
+                if (!match) continue;
+                const grade = match[1].toUpperCase();
+                const fromSections = (state.classSections || [])
+                    .filter(item => toCleanString(item.class).toUpperCase() === grade)
+                    .map(item => item.className || `Class-${item.class}-${item.section}`)
+                    .filter(Boolean);
+
+                if (fromSections.length > 0) return fromSections;
+                return [`Class-${grade}-A`];
+            }
+
+            if (withSection.startsWith('Class-')) return [withSection];
+            return [];
+        }
+
+        function getDailySubjectCount(className, dayName, subject) {
+            const subjectKey = normalizeSubjectCode(subject);
+            const classCounts = classDailySubjectCount[className];
+            if (!classCounts || !classCounts[dayName]) return 0;
+            return classCounts[dayName][subjectKey] || 0;
+        }
+
+        function incrementDailySubjectCount(className, dayName, subject, amount) {
+            const subjectKey = normalizeSubjectCode(subject);
+            if (!classDailySubjectCount[className]) classDailySubjectCount[className] = {};
+            if (!classDailySubjectCount[className][dayName]) classDailySubjectCount[className][dayName] = {};
+            classDailySubjectCount[className][dayName][subjectKey] =
+                (classDailySubjectCount[className][dayName][subjectKey] || 0) + amount;
+        }
+
+        function getPreviousPeriodSubject(timetable, className, dayName, periodNumber) {
+            if (periodNumber <= 1) return '';
+            const previous = getClassDayPeriod(timetable, className, dayName, periodNumber - 1);
+            return previous ? normalizeSubjectCode(previous.subject) : '';
+        }
+
+        /** Enforce max 1–2 periods of the same subject per class per day. */
+        function exceedsDailySubjectLimit(className, dayName, subject, additionalPeriods, options) {
+            const maxPerDay = options.isLabBlock ? 2 : 2;
+            const current = getDailySubjectCount(className, dayName, subject);
+            return current + additionalPeriods > maxPerDay;
+        }
+
+        /** Score a candidate slot — higher is better. */
+        function scoreCandidateSlot(timetable, task, dayName, periodNumbers, options) {
+            let score = 100;
+            const subjectKey = normalizeSubjectCode(task.subject);
+            const schoolDays = getStandardDayOrder();
+            const dailyCount = getDailySubjectCount(task.className, dayName, task.subject);
+
+            if (dailyCount === 0) score += 40;
+            else if (dailyCount === 1) score += 10;
+            else score -= 50;
+
+            const dayIndex = schoolDays.indexOf(dayName);
+            const weeklyCounts = schoolDays.map(day => getDailySubjectCount(task.className, day, task.subject));
+            const minWeeklyDayCount = Math.min(...weeklyCounts);
+            if (dailyCount === minWeeklyDayCount) score += 25;
+
+            periodNumbers.forEach(periodNumber => {
+                const previousSubject = getPreviousPeriodSubject(timetable, task.className, dayName, periodNumber);
+                if (previousSubject && previousSubject === subjectKey) {
+                    score -= 60;
+                }
+                const nextPeriod = getClassDayPeriod(timetable, task.className, dayName, periodNumber + 1);
+                if (nextPeriod && normalizeSubjectCode(nextPeriod.subject) === subjectKey) {
+                    score -= 30;
+                }
+            });
+
+            if (options.preferFixedPeriods) score += 15;
+
+            const teacherLoad = getTeacherLoad(task.teacherId);
+            score -= teacherLoad * 2;
+
+            if (options.isLabBlock && periodNumbers.length === 2) {
+                const blockKey = periodNumbers.join('-');
+                if (blockKey === '1-2' || blockKey === '5-6') score += 20;
+            }
+
+            return score;
+        }
+
+        /** Find the highest-scoring valid slot for a task. */
+        function findBestCandidateSlot(timetable, task, periodNumbers, options, maxTeacherPeriods, labBlockList, searchAllPeriods) {
+            const candidates = [];
+            const periodsPerDay = state.config.periodsPerDay || 8;
+            const schoolDays = getStandardDayOrder();
+            const slotPatterns = [];
+
+            if (labBlockList && labBlockList.length > 0) {
+                schoolDays.forEach(dayName => {
+                    labBlockList.forEach(block => slotPatterns.push({ dayName, periodNumbers: block }));
+                });
+            } else if (searchAllPeriods) {
+                schoolDays.forEach(dayName => {
+                    for (let periodNumber = 1; periodNumber <= periodsPerDay; periodNumber++) {
+                        slotPatterns.push({ dayName, periodNumbers: [periodNumber] });
+                    }
+                });
+            } else if (periodNumbers && periodNumbers.length > 0) {
+                schoolDays.forEach(dayName => slotPatterns.push({ dayName, periodNumbers }));
+            }
+
+            slotPatterns.forEach(({ dayName, periodNumbers: nums }) => {
+                const validation = validateSlot(
+                    timetable,
+                    task.className,
+                    dayName,
+                    nums,
+                    task.teacherId,
+                    maxTeacherPeriods
+                );
+                if (!validation.valid) return;
+
+                if (exceedsDailySubjectLimit(
+                    task.className,
+                    dayName,
+                    task.subject,
+                    nums.length,
+                    options
+                )) {
+                    return;
+                }
+
+                candidates.push({
+                    dayName,
+                    periodNumbers: nums,
+                    score: scoreCandidateSlot(timetable, task, dayName, nums, options)
+                });
+            });
+
+            if (candidates.length === 0) return null;
+            candidates.sort((a, b) => b.score - a.score);
+            return candidates[0];
+        }
+
+        /** Assign slot and update daily subject distribution trackers. */
+        function assignSlotWithTracking(timetable, className, dayName, periodNumbers, teacherId, subject, teacherName) {
+            assignSlot(timetable, className, dayName, periodNumbers, teacherId, subject, teacherName);
+            incrementDailySubjectCount(className, dayName, subject, periodNumbers.length);
+        }
+
+        function getTeacherLoad(teacherId) {
+            return teacherLoadTracker[toCleanString(teacherId)] || 0;
+        }
+
+        function isTeacherBusy(teacherId, dayName, periodNumber) {
+            const tid = toCleanString(teacherId);
+            if (!tid || !teacherBusyTracker[tid]) return false;
+            return !!teacherBusyTracker[tid][`${dayName}-P${periodNumber}`];
+        }
+
+        /** Check whether a class period cell can receive this teacher assignment. */
+        function validateSlot(timetable, className, dayName, periodNumbers, teacherId, maxTeacherPeriods) {
+            const tid = toCleanString(teacherId);
+            if (!tid || !className || !dayName || !periodNumbers || periodNumbers.length === 0) {
+                return { valid: false, reason: 'Missing slot data' };
+            }
+
+            const classData = timetable[className];
+            if (!classData || !Array.isArray(classData.days)) {
+                return { valid: false, reason: `Unknown class ${className}` };
+            }
+
+            for (const periodNumber of periodNumbers) {
+                const periodEntry = getClassDayPeriod(timetable, className, dayName, periodNumber);
+                if (!periodEntry) {
+                    return { valid: false, reason: `Invalid period P${periodNumber}` };
+                }
+                if (periodEntry.isLocked) {
+                    return { valid: false, reason: `Slot locked (${className}, ${dayName}, P${periodNumber})` };
+                }
+                if (!isPeriodSlotEmpty(periodEntry)) {
+                    return { valid: false, reason: `Class slot occupied (${className}, ${dayName}, P${periodNumber})` };
+                }
+                if (isTeacherBusy(tid, dayName, periodNumber)) {
+                    return { valid: false, reason: `Teacher busy (${tid}, ${dayName}, P${periodNumber})` };
+                }
+            }
+
+            if (getTeacherLoad(tid) + periodNumbers.length > maxTeacherPeriods) {
+                return { valid: false, reason: `Teacher ${tid} exceeds max weekly periods` };
+            }
+
+            return { valid: true };
+        }
+
+        /** Write subject + teacher into the canonical days/periods structure. */
+        function assignSlot(timetable, className, dayName, periodNumbers, teacherId, subject, teacherName) {
+            const tid = toCleanString(teacherId);
+            const resolvedTeacherName = teacherName || findTeacherNameById(tid);
+            const resolvedSubject = toCleanString(subject);
+
+            periodNumbers.forEach(periodNumber => {
+                const periodEntry = getClassDayPeriod(timetable, className, dayName, periodNumber);
+                if (!periodEntry) return;
+
+                periodEntry.teacherId = tid;
+                periodEntry.teacherName = resolvedTeacherName;
+                periodEntry.subject = resolvedSubject;
+
+                if (!teacherBusyTracker[tid]) teacherBusyTracker[tid] = {};
+                teacherBusyTracker[tid][`${dayName}-P${periodNumber}`] = true;
+            });
+
+            teacherLoadTracker[tid] = getTeacherLoad(tid) + periodNumbers.length;
+            return true;
+        }
+
+        /** Expand fixed-period values: P1, P1-P2, bare 1, or lab-block pairs like 0-1 / 5-6. */
+        function expandFixedPeriodEntry(fixedEntry) {
+            let cleaned = toCleanString(fixedEntry);
+            if (!cleaned) return [];
+
+            // Strip decimal suffix (e.g., "1.0" -> "1")
+            cleaned = cleaned.replace(/\.0+$/, '');
+
+            const pRangeMatch = cleaned.match(/^P(\d+)-P(\d+)$/i);
+            if (pRangeMatch) {
+                const start = Number(pRangeMatch[1]);
+                const end = Number(pRangeMatch[2]);
+                const periodNumbers = [];
+                for (let i = start; i <= end; i++) periodNumbers.push(i);
+                return periodNumbers;
+            }
+
+            if (/^P(\d+)$/i.test(cleaned)) {
+                return [Number(cleaned.match(/\d+/)[0])];
+            }
+
+            if (/^\d+$/.test(cleaned)) {
+                return [Number(cleaned)];
+            }
+
+            const indexRangeMatch = cleaned.match(/^(\d+)-(\d+)$/);
+            if (indexRangeMatch) {
+                const start = Number(indexRangeMatch[1]);
+                const end = Number(indexRangeMatch[2]);
+                const periodNumbers = [];
+                if (start === 0) {
+                    for (let i = start; i <= end; i++) periodNumbers.push(i + 1);
+                } else {
+                    for (let i = start; i <= end; i++) periodNumbers.push(i);
+                }
+                return periodNumbers;
+            }
+
+            return [];
+        }
+
+        function parseFixedPeriodGroups(fixedPeriodsStr) {
+            const groups = [];
+            toCleanString(fixedPeriodsStr)
+                .split(/[,;]/)
+                .map(part => part.trim())
+                .filter(Boolean)
+                .forEach(part => {
+                    const expanded = expandFixedPeriodEntry(part);
+                    if (expanded.length > 0) groups.push(expanded);
+                });
+            return groups;
+        }
+
+        /** True when a task requires Period 1 only (bare "1", "P1", etc.). */
+        function taskRequiresFixedPeriodOne(task) {
+            return (task.fixedPeriodGroups || []).some(
+                group => group.length === 1 && group[0] === 1
+            );
+        }
+
+        /** Lock empty P1 slots so later schedulers cannot place other subjects there. */
+        function reserveClassP1Slots(timetable, tasks) {
+            const schoolDays = getStandardDayOrder();
+            const reservedClasses = new Set();
+
+            tasks.forEach(task => {
+                if (!task.hasFixedPeriods || !taskRequiresFixedPeriodOne(task)) return;
+                if (reservedClasses.has(task.className)) return;
+                reservedClasses.add(task.className);
+
+                schoolDays.forEach(dayName => {
+                    const periodEntry = getClassDayPeriod(timetable, task.className, dayName, 1);
+                    if (periodEntry && isPeriodSlotEmpty(periodEntry)) {
+                        periodEntry.isLocked = true;
+                    }
+                });
+            });
+        }
+
+        /** Validation for fixed P1 assignment — allows reserved-but-empty locked slots. */
+        function canAssignFixedP1Slot(timetable, className, dayName, periodNumber, teacherId, maxTeacherPeriods) {
+            const periodEntry = getClassDayPeriod(timetable, className, dayName, periodNumber);
+            if (!periodEntry || !isPeriodSlotEmpty(periodEntry)) return false;
+            if (isTeacherBusy(teacherId, dayName, periodNumber)) return false;
+            if (getTeacherLoad(teacherId) + 1 > maxTeacherPeriods) return false;
+            return true;
+        }
+
+        /** Enumerate day/period combinations, optionally prioritising fixed period numbers. */
+        function getSlotCandidates(className, preferredPeriodNumbers) {
+            const schoolDays = getStandardDayOrder();
+            const periodsPerDay = state.config.periodsPerDay || 8;
+            const candidates = [];
+            const seen = new Set();
+
+            const pushCandidate = (dayName, periodNumbers) => {
+                const key = `${className}|${dayName}|${periodNumbers.join('-')}`;
+                if (seen.has(key)) return;
+                seen.add(key);
+                candidates.push({ dayName, periodNumbers });
+            };
+
+            if (preferredPeriodNumbers && preferredPeriodNumbers.length > 0) {
+                schoolDays.forEach(dayName => pushCandidate(dayName, preferredPeriodNumbers));
+            }
+
+            schoolDays.forEach(dayName => {
+                for (let periodNumber = 1; periodNumber <= periodsPerDay; periodNumber++) {
+                    pushCandidate(dayName, [periodNumber]);
+                }
+            });
+
+            return candidates;
+        }
+
+        /** Flatten teacher mappings into schedulable tasks (one per resolved class name). */
+        function buildSchedulingTasks() {
+            const tasks = [];
+
+            (state.teacherMappings || []).forEach((mapping, mappingIndex) => {
+                const classNames = parseGradeSectionParts(mapping.gradeSection)
+                    .flatMap(part => resolveMappingToClassNames(part))
+                    .filter(Boolean);
+
+                const uniqueClassNames = [...new Set(classNames)];
+                const subjectCode = normalizeSubjectCode(mapping.subject);
+
+                if (subjectCode === 'CSC' && uniqueClassNames.length > 1) {
+                    tasks.push({
+                        mappingIndex,
+                        className: uniqueClassNames[0],
+                        teacherId: mapping.teacherId,
+                        teacherName: mapping.teacherName || findTeacherNameById(mapping.teacherId),
+                        subject: subjectCode,
+                        periodsNeeded: Math.max(0, Number(mapping.periodsPerWeek) || 0),
+                        fixedPeriodGroups: parseFixedPeriodGroups(mapping.fixedPeriods),
+                        isLabSubject: true,
+                        hasFixedPeriods: parseFixedPeriodGroups(mapping.fixedPeriods).length > 0,
+                        isClubbed: true,
+                        clubbedClasses: uniqueClassNames
+                    });
+                } else {
+                    uniqueClassNames.forEach(className => {
+                        tasks.push({
+                            mappingIndex,
+                            className,
+                            teacherId: mapping.teacherId,
+                            teacherName: mapping.teacherName || findTeacherNameById(mapping.teacherId),
+                            subject: subjectCode,
+                            periodsNeeded: Math.max(0, Number(mapping.periodsPerWeek) || 0),
+                            fixedPeriodGroups: parseFixedPeriodGroups(mapping.fixedPeriods),
+                            isLabSubject: subjectCode === 'CSC',
+                            hasFixedPeriods: parseFixedPeriodGroups(mapping.fixedPeriods).length > 0
+                        });
+                    });
+                }
+            });
+
+            return tasks;
+        }
+
+        /** CSC must use consecutive 2-period blocks at P1–P2 or P5–P6 only. */
+        const CSC_LAB_BLOCKS = [[1, 2], [5, 6]];
+
+        function findBestClubbedCandidateSlot(timetable, task, maxTeacherPeriods, labBlockList) {
+            const candidates = [];
+            const schoolDays = getStandardDayOrder();
+            const slotPatterns = [];
+
+            if (labBlockList && labBlockList.length > 0) {
+                schoolDays.forEach(dayName => {
+                    labBlockList.forEach(block => slotPatterns.push({ dayName, periodNumbers: block }));
+                });
+            }
+
+            slotPatterns.forEach(({ dayName, periodNumbers: nums }) => {
+                const tid = toCleanString(task.teacherId);
+                let valid = true;
+
+                if (getTeacherLoad(tid) + nums.length > maxTeacherPeriods) {
+                    valid = false;
+                }
+
+                if (valid) {
+                    for (const periodNumber of nums) {
+                        if (isTeacherBusy(tid, dayName, periodNumber)) {
+                            valid = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (valid) {
+                    for (const className of task.clubbedClasses) {
+                        const classData = timetable[className];
+                        if (!classData || !Array.isArray(classData.days)) {
+                            valid = false;
+                            break;
+                        }
+
+                        for (const periodNumber of nums) {
+                            const periodEntry = getClassDayPeriod(timetable, className, dayName, periodNumber);
+                            if (!periodEntry || periodEntry.isLocked || !isPeriodSlotEmpty(periodEntry)) {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        if (!valid) break;
+
+                        if (exceedsDailySubjectLimit(
+                            className,
+                            dayName,
+                            task.subject,
+                            nums.length,
+                            { isLabBlock: true }
+                        )) {
+                            valid = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (valid) {
+                    let totalScore = 0;
+                    task.clubbedClasses.forEach(className => {
+                        const tempTask = { ...task, className };
+                        totalScore += scoreCandidateSlot(timetable, tempTask, dayName, nums, { isLabBlock: true });
+                    });
+
+                    candidates.push({
+                        dayName,
+                        periodNumbers: nums,
+                        score: totalScore
+                    });
+                }
+            });
+
+            if (candidates.length === 0) return null;
+            candidates.sort((a, b) => b.score - a.score);
+            return candidates[0];
+        }
+
+        function scheduleLabBlock(timetable, task, unscheduled) {
+            const maxTeacherPeriods = state.config.periodsPerTeacher || 30;
+            let remaining = task.periodsNeeded;
+
+            while (remaining >= 2) {
+                let best = null;
+                if (task.isClubbed) {
+                    best = findBestClubbedCandidateSlot(
+                        timetable,
+                        task,
+                        maxTeacherPeriods,
+                        CSC_LAB_BLOCKS
+                    );
+                } else {
+                    best = findBestCandidateSlot(
+                        timetable,
+                        task,
+                        null,
+                        { isLabBlock: true },
+                        maxTeacherPeriods,
+                        CSC_LAB_BLOCKS
+                    );
+                }
+
+                if (!best) break;
+
+                if (task.isClubbed) {
+                    const blockHasLockedSlot = best.periodNumbers.some(periodNumber => {
+                        return task.clubbedClasses.some(className => {
+                            const period = getClassDayPeriod(timetable, className, best.dayName, periodNumber);
+                            return period && period.isLocked;
+                        });
+                    });
+                    if (blockHasLockedSlot) break;
+
+                    task.clubbedClasses.forEach((className, idx) => {
+                        assignSlotWithTracking(
+                            timetable,
+                            className,
+                            best.dayName,
+                            best.periodNumbers,
+                            task.teacherId,
+                            task.subject,
+                            task.teacherName
+                        );
+                        if (idx > 0) {
+                            const tid = toCleanString(task.teacherId);
+                            teacherLoadTracker[tid] = Math.max(0, getTeacherLoad(tid) - best.periodNumbers.length);
+                        }
+                    });
+                } else {
+                    const blockHasLockedSlot = best.periodNumbers.some(periodNumber => {
+                        const period = getClassDayPeriod(timetable, task.className, best.dayName, periodNumber);
+                        return period && period.isLocked;
+                    });
+                    if (blockHasLockedSlot) break;
+
+                    assignSlotWithTracking(
+                        timetable,
+                        task.className,
+                        best.dayName,
+                        best.periodNumbers,
+                        task.teacherId,
+                        task.subject,
+                        task.teacherName
+                    );
+                }
+                remaining -= best.periodNumbers.length;
+            }
+
+            if (remaining > 0) {
+                unscheduled.push({
+                    className: task.isClubbed ? task.clubbedClasses.join(';') : task.className,
+                    teacherId: task.teacherId,
+                    teacherName: task.teacherName,
+                    subject: task.subject,
+                    periodsNeeded: task.periodsNeeded,
+                    periodsScheduled: task.periodsNeeded - remaining,
+                    periodsUnscheduled: remaining,
+                    reason: 'CSC lab block could not be fully scheduled'
+                });
+            }
+        }
+
+        /** Schedule all fixed-period mappings first (class-teacher P1 slots, etc.). */
+        function scheduleFixedTasks(timetable, tasks, deferredTasks, unscheduled) {
+            const maxTeacherPeriods = state.config.periodsPerTeacher || 30;
+            const schoolDays = getStandardDayOrder();
+
+            reserveClassP1Slots(timetable, tasks);
+
+            tasks.forEach(task => {
+                console.log("Scheduling fixed task:", task);
+
+                if (!task.hasFixedPeriods) {
+                    deferredTasks.push(task);
+                    return;
+                }
+
+                let remaining = task.periodsNeeded;
+
+                while (remaining > 0) {
+                    let assignedThisRound = false;
+
+                    for (const periodNumbers of task.fixedPeriodGroups) {
+                        if (periodNumbers.length === 1 && periodNumbers[0] === 1) {
+                            for (const dayName of schoolDays) {
+                                if (remaining <= 0) break;
+
+                                const periodEntry = getClassDayPeriod(timetable, task.className, dayName, 1);
+                                if (!periodEntry || !isPeriodSlotEmpty(periodEntry)) {
+                                    continue;
+                                }
+
+                                if (!canAssignFixedP1Slot(
+                                    timetable,
+                                    task.className,
+                                    dayName,
+                                    1,
+                                    task.teacherId,
+                                    maxTeacherPeriods
+                                )) {
+                                    continue;
+                                }
+
+                                assignSlotWithTracking(
+                                    timetable,
+                                    task.className,
+                                    dayName,
+                                    [1],
+                                    task.teacherId,
+                                    task.subject,
+                                    task.teacherName
+                                );
+                                periodEntry.isLocked = true;
+                                console.log(
+                                    "Fixed period assigned",
+                                    task.className,
+                                    dayName,
+                                    "P1",
+                                    task.subject
+                                );
+                                remaining -= 1;
+                                assignedThisRound = true;
+                            }
+                        } else if (periodNumbers.length === 1) {
+                            const periodNumber = periodNumbers[0];
+                            for (const dayName of schoolDays) {
+                                if (remaining <= 0) break;
+
+                                const periodEntry = getClassDayPeriod(timetable, task.className, dayName, periodNumber);
+                                if (!periodEntry || periodEntry.isLocked || !isPeriodSlotEmpty(periodEntry)) {
+                                    continue;
+                                }
+
+                                const validation = validateSlot(
+                                    timetable,
+                                    task.className,
+                                    dayName,
+                                    [periodNumber],
+                                    task.teacherId,
+                                    maxTeacherPeriods
+                                );
+                                if (!validation.valid) continue;
+
+                                assignSlotWithTracking(
+                                    timetable,
+                                    task.className,
+                                    dayName,
+                                    [periodNumber],
+                                    task.teacherId,
+                                    task.subject,
+                                    task.teacherName
+                                );
+                                periodEntry.isLocked = true;
+                                console.log(
+                                    "Fixed period assigned",
+                                    task.className,
+                                    dayName,
+                                    `P${periodNumber}`,
+                                    task.subject
+                                );
+                                remaining -= 1;
+                                assignedThisRound = true;
+                            }
+                        } else {
+                            const best = findBestCandidateSlot(
+                                timetable,
+                                task,
+                                periodNumbers,
+                                { preferFixedPeriods: true, isLabBlock: periodNumbers.length > 1 },
+                                maxTeacherPeriods
+                            );
+
+                            if (!best) continue;
+
+                            assignSlotWithTracking(
+                                timetable,
+                                task.className,
+                                best.dayName,
+                                best.periodNumbers,
+                                task.teacherId,
+                                task.subject,
+                                task.teacherName
+                            );
+                            best.periodNumbers.forEach(periodNumber => {
+                                const periodEntry = getClassDayPeriod(timetable, task.className, best.dayName, periodNumber);
+                                if (periodEntry) periodEntry.isLocked = true;
+                            });
+                            console.log(
+                                "Fixed period assigned",
+                                task.className,
+                                best.dayName,
+                                best.periodNumbers.map(n => `P${n}`).join('-'),
+                                task.subject
+                            );
+                            remaining -= best.periodNumbers.length;
+                            assignedThisRound = true;
+                        }
+                        break;
+                    }
+
+                    if (!assignedThisRound) {
+                        console.warn("Failed fixed scheduling", task);
+                        break;
+                    }
+                }
+
+                if (remaining > 0) {
+                    if (taskRequiresFixedPeriodOne(task)) {
+                        console.warn("Fixed class teacher period failed", task);
+                    } else {
+                        console.warn("Failed fixed scheduling", task);
+                    }
+                    (unscheduled || []).push({
+                        className: task.className,
+                        teacherId: task.teacherId,
+                        teacherName: task.teacherName,
+                        subject: task.subject,
+                        periodsNeeded: task.periodsNeeded,
+                        periodsScheduled: task.periodsNeeded - remaining,
+                        periodsUnscheduled: remaining,
+                        reason: 'Fixed period constraint could not be fully satisfied'
+                    });
+                }
+            });
+        }
+
+        /** Score-based scheduling for regular (non-lab) subjects. */
+        function scheduleNormalTask(timetable, task, unscheduled) {
+            const maxTeacherPeriods = state.config.periodsPerTeacher || 30;
+            let remaining = task.periodsNeeded;
+
+            while (remaining > 0) {
+                const best = findBestCandidateSlot(
+                    timetable,
+                    task,
+                    null,
+                    {},
+                    maxTeacherPeriods,
+                    null,
+                    true
+                );
+
+                if (!best) break;
+
+                const slotHasLockedPeriod = best.periodNumbers.some(periodNumber => {
+                    const period = getClassDayPeriod(timetable, task.className, best.dayName, periodNumber);
+                    return period && period.isLocked;
+                });
+                if (slotHasLockedPeriod) break;
+
+                assignSlotWithTracking(
+                    timetable,
+                    task.className,
+                    best.dayName,
+                    best.periodNumbers,
+                    task.teacherId,
+                    task.subject,
+                    task.teacherName
+                );
+                remaining -= 1;
+            }
+
+            if (remaining > 0) {
+                unscheduled.push({
+                    className: task.className,
+                    teacherId: task.teacherId,
+                    teacherName: task.teacherName,
+                    subject: task.subject,
+                    periodsNeeded: task.periodsNeeded,
+                    periodsScheduled: task.periodsNeeded - remaining,
+                    periodsUnscheduled: remaining
+                });
+            }
+        }
+
+        /** Assign generated timetable to state and persist using existing storage helpers. */
+        function saveGeneratedTimetable(timetable, unscheduled) {
+            state.timetableData = timetable;
+            assignTeacherIdsInTimetableData();
+            saveTimetableToStorage();
+            rebuildTeacherSubjectMapFromMasterData();
+            saveTeacherSubjectMapToStorage();
+            currentUnscheduledList = unscheduled || [];
+        }
+
+        /** Show generation success in the Upload Timetable summary cards. */
+        function showTimetableGenerationStatus(classCount, unscheduled) {
+            const uploadStatus = document.getElementById('uploadStatus');
+            const uploadDetails = document.getElementById('uploadDetails');
+            const timetableDataInfo = document.getElementById('timetableDataInfo');
+
+            if (uploadStatus && uploadDetails) {
+                uploadStatus.style.display = 'block';
+                let detailsHtml = `<p><i class="fas fa-check-circle" style="color: var(--success-color);"></i> Timetable generated for ${classCount} class section(s).</p>`;
+                if ((unscheduled || []).length > 0) {
+                    detailsHtml += `<p><i class="fas fa-exclamation-triangle" style="color: var(--warning-color);"></i> ${unscheduled.length} mapping(s) could not be fully scheduled.</p>`;
+                }
+                uploadDetails.innerHTML = detailsHtml;
+            }
+
+            if (timetableDataInfo) {
+                timetableDataInfo.style.display = 'block';
+            }
+        }
+
+        /** Main entry: fixed tasks → CSC lab blocks → score-based normal scheduling. */
+        function generateTimetable() {
+            if (!(state.teacherMappings || []).length) {
+                alert('Add at least one teacher-subject mapping with periods per week before generating.');
+                return;
+            }
+
+            resetGenerationTrackers();
+            const timetable = createEmptyTimetable();
+
+            if (Object.keys(timetable).length === 0) {
+                alert('Define class sections under Bulk Classes & Sections (or include grade-sections in mappings) first.');
+                return;
+            }
+
+            const unscheduled = [];
+            const allTasks = buildSchedulingTasks();
+            const deferredTasks = [];
+
+            const fixedTasks = allTasks.filter(task => task.hasFixedPeriods && !task.isClubbed);
+            const labTasks = allTasks.filter(task => (task.isLabSubject && !task.hasFixedPeriods) || task.isClubbed);
+            const normalTasks = allTasks.filter(task => !task.hasFixedPeriods && !task.isLabSubject && !task.isClubbed);
+
+            scheduleFixedTasks(timetable, fixedTasks, deferredTasks, unscheduled);
+
+            labTasks.forEach(task => scheduleLabBlock(timetable, task, unscheduled));
+
+            [...normalTasks, ...deferredTasks.filter(task => !task.isLabSubject)].forEach(task => {
+                scheduleNormalTask(timetable, task, unscheduled);
+            });
+
+            const classCount = Object.keys(timetable).length;
+
+            saveGeneratedTimetable(timetable, unscheduled);
+            updateTimetableSummary();
+            updateClassFilters();
+            renderTimetable();
+            showTimetableGenerationStatus(classCount, unscheduled);
+
+            let message = `Timetable generated for ${classCount} class section(s).`;
+            if (unscheduled.length > 0) {
+                message += `\n\n${unscheduled.length} mapping(s) could not be fully scheduled:`;
+                message += '\n' + unscheduled.slice(0, 5).map(item =>
+                    `${item.className} / ${item.subject} (${item.teacherId}): ${item.periodsUnscheduled} period(s) remaining`
+                ).join('\n');
+                if (unscheduled.length > 5) {
+                    message += `\n... and ${unscheduled.length - 5} more.`;
+                }
+            }
+            alert(message);
+        }
         
         function processStateTimetableWorkbook(workbook) {
             const firstSheetName = workbook.SheetNames[0];
@@ -2506,6 +3678,8 @@ Return CSV now.`;
             
             Object.keys(state.timetableData).forEach(className => {
                 const classData = state.timetableData[className];
+                if (!isValidTimetableClassData(classData)) return;
+
                 classData.days.forEach(day => {
                     day.periods.forEach(period => {
                         const label = toCleanString(period.subject);
@@ -2600,9 +3774,9 @@ Return CSV now.`;
                 modifyClassFilter.innerHTML += `<option value="${className}">${className}</option>`;
             });
             
-            // Update teacher filter
+            // Update teacher filter from valid timetable entries only
             const teachers = new Set();
-            classes.forEach(className => {
+            Object.keys(state.timetableData).forEach(className => {
                 const classData = state.timetableData[className];
                 if (classData && classData.days) {
                     classData.days.forEach(day => {
@@ -2683,7 +3857,8 @@ Return CSV now.`;
                 
                 classesToShow.forEach(className => {
                     const classData = state.timetableData[className];
-                    
+                    if (!isValidTimetableClassData(classData)) return;
+
                     html += `<h3 style="margin: 20px 0 10px 15px;">${className}</h3>`;
                     html += generateTimetableHTML(classData);
                 });
@@ -3255,9 +4430,11 @@ Return CSV now.`;
             let csv = 'Class-Section,Day';
             
             // Get number of periods from first class
-            const firstClass = Object.keys(state.timetableData)[0];
+            const firstClass = Object.keys(state.timetableData).find(className =>
+                isValidTimetableClassData(state.timetableData[className])
+            );
             if (!firstClass) return;
-            
+
             const numPeriods = state.timetableData[firstClass].days[0].periods.length;
             
             // Add period headers
@@ -3269,7 +4446,8 @@ Return CSV now.`;
             // Add data for each class
             Object.keys(state.timetableData).forEach(className => {
                 const classData = state.timetableData[className];
-                
+                if (!isValidTimetableClassData(classData)) return;
+
                 const dayOrder = getStandardDayOrder();
                 
                 dayOrder.forEach(dayName => {
