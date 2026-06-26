@@ -322,7 +322,7 @@
 .editable-table {
     width: 100%;
     border-collapse: collapse;
-    min-width: 760px;
+    min-width: 1000px;
 }
 
 .editable-table th {
@@ -341,7 +341,7 @@
 .editable-table input,
 .editable-table select {
     width: 100%;
-    min-width: 90px;
+    min-width: 110px;
     border: 1px solid #d8d8d8;
     border-radius: 5px;
     padding: 8px;
