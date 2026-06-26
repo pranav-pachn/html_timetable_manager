@@ -1,100 +1,108 @@
-# html_timetable_manager
+# HTML Timetable Manager
 
-## Principal Workflow
+A purely client-side browser application for Principals and Administrators to design, generate, and manage school timetables seamlessly.
 
-The app stores all imported setup data in browser `localStorage`.
+## Workflow for the Principal
 
-1. Use **Setup** to import the teacher list CSV and teacher grade-section subject mapping CSV.
-2. Edit imported teachers or mappings directly in the CRUD tables, then click **Save Changes**.
-3. Set timetable config: school days, periods per day, max periods per teacher, and AI prompt detail.
-4. Use **AI Prompt** to generate/copy/download a prompt that asks an AI to produce a no-overlap timetable CSV.
-5. Use **Upload Timetable** to import the AI-generated CSV.
-6. Use **View Timetable** for class-wise, teacher-wise, and subject-wise views, plus overlap checks.
+The application stores all imported setup data securely in your browser's `localStorage`. To set up and generate a timetable from scratch, the Principal or Administrator should follow these exact steps and import the respective files in order:
 
-## Teacher List CSV
+### 1. Setup the Foundation (Master Data)
+Navigate to the **Setup** section in the sidebar to define the core structural data of the school. You will need to import the following three files:
+*   **Step 1.1: Bulk Classes & Sections**
+    *   **File to Import:** `class-sections.csv`
+    *   **Action:** Upload your CSV to establish the grades and sections in your school (e.g., Grade-I-A, Grade-I-B). You can also add them manually.
+*   **Step 1.2: Bulk Subjects**
+    *   **File to Import:** `subjects-code.csv`
+    *   **Action:** Upload your CSV to establish all available subjects and their codes.
+*   **Step 1.3: Teacher List**
+    *   **File to Import:** `teacher-list.csv`
+    *   **Action:** Upload your CSV to register all faculty members with their basic contact details and class teacher assignments.
+
+### 2. Configure the Timetable Parameters
+In the **Timetable Configuration** panel under Setup, set your scheduling constraints:
+*   **School Days:** Select the operating days (e.g., Monday to Saturday).
+*   **Periods per Day:** Set how many periods are in a standard day.
+*   **Max Periods Per Teacher:** Determine the maximum workload any individual teacher can be assigned per week.
+
+### 3. Define Lab Blocks (Optional)
+If your school has continuous practical/lab sessions that span multiple periods:
+*   **File to Import:** `lab-blocks.csv`
+*   **Action:** Go to the **Lab Blocks** panel in the Setup section and upload the CSV to define which subjects require block periods and how long they should be.
+
+### 4. Import Teacher-Subject Mappings (Crucial Step)
+Go to the **Teacher Grade-Section Subject Mapping** panel. This step tells the system who teaches what, where, and how often.
+*   **File to Import:** `teacher-mapping.csv` (or `teacher-mapping-combined.csv` for shared classes)
+*   **Action:** Upload the CSV mapping file. This file contains:
+    *   Which Teacher teaches which Subject to which Grade-Section.
+    *   **Periods Per Week:** How many periods this mapping requires.
+    *   **Fixed Periods:** Specific locked periods (e.g., `1` for P1, `5,6` for P5 and P6).
+    *   **Mode:** Whether the class is Individual (`0`) or Combined (`1`) (where multiple classes share the same teacher simultaneously).
+
+### 5. Save and Generate
+*   Once all data is imported from the CSV files and looks correct in the UI tables, click **Save Changes** at the top right.
+*   Click **Generate Timetable**. The built-in scheduling engine will automatically construct a complete, conflict-free timetable honoring your mappings, fixed periods, lab blocks, and combined classes.
+
+### 6. Review and Refine
+Navigate to the **View** section to visually inspect the results:
+*   **Teacher View:** Ensure no teacher is double-booked and verify their workloads.
+*   **Class View:** Ensure all periods are filled correctly for every class.
+*   **Subject View:** Track subject distributions across the week.
+
+*(Optional Alternative)*: If you prefer to generate the timetable externally, you can use the **AI Prompt** tab to copy a prompt to feed into an LLM (like ChatGPT or Claude), and then use **Upload Timetable** to import the generated CSV.
+
+---
+
+## Required CSV Formats
+
+### 1. Class Sections CSV
+```csv
+Class,Section,Teaching Mode,Combined Group
+Grade-I,A,,
+Grade-I,B,,
+```
+
+### 2. Subjects CSV
+```csv
+Subject Code,Subject Name
+MTH,Maths
+ENG,English
+SCI,Science
+```
+
+### 3. Teacher List CSV
+```csv
+Teacher ID,Teacher Name,Class Teacher Subject,Class Teacher Grade,Class Teacher Section,Phone,Email
+T001,Indira,MTH,Grade-I,A,9876543210,indira@school.com
+T002,Sai Priya,EVS,Grade-I,B,,
+```
+
+### 4. Teacher Grade-Section Subject Mapping CSV
+```csv
+Teacher ID,Grade-Section,Subject,Periods Per Week,Fixed Periods,Mode
+T001,Grade-I-A,MTH,5,,0
+T002,Grade-I-A,EVS,4,1,0
+T003,Grade-V-A;Grade-V-B,PT,2,,1
+```
+
+---
+
+## Output CSV Format
+If you choose to upload a manually generated timetable or one from an AI, ensure it follows this strict CSV format:
 
 ```csv
-Teacher ID,Teacher Name,Subjects,Phone,Email
-T001,Indira,"Maths; English",,
-T002,Sai Priya,EVS,,
+Class-Section,Day,P1,P2,P3,P4,P5,P6,P7,P8
+Grade-I-A,Monday,T001:Indira:MTH,T002:Sai:EVS,,,,,,,
 ```
 
-## Teacher Grade-Section Subject Mapping CSV
-
-```csv
-Teacher ID,Teacher Name,Grade-Section,Subject,Periods Per Week
-T001,Indira,Grade-I-A,Maths,5
-T002,Sai Priya,Grade-I-A,EVS,4
-```
-
-## CSV Upload Format
-
-Use a CSV with columns like:
-
-```csv
-Class-Section,Day,P1,P2,P3,P4,P5,P6,P7,P8,P9,P10
-```
-
-Each period cell must follow:
-
-```text
-TeacherID:TeacherName:Subject
-```
-
-Separator rules:
-- `:` between `TeacherID` and `TeacherName`
-- `:` between `TeacherName` and `Subject`
-- `-` between `Class` and `Section` (for example `Grade-I-A`)
+### Cell Separator Rules (Important)
+*   Use this structure strictly: `TeacherID:TeacherName:Subject`
+*   `:` separates TeacherID and TeacherName
+*   `:` separates TeacherName and Subject
+*   `-` separates Class and Section (e.g., `Grade-I-A`)
 
 ## Excel Upload Formats
-
-Supported Excel formats in the app:
-- `Standard (Sheet-per-Class)`: One sheet per class, row-wise day timetable.
-- `STATE TIME TABLE (19.07.2025)`: Teacher-wise matrix with day blocks and period numbers.
+Supported Excel formats for uploading existing timetables:
+*   `Standard (Sheet-per-Class)`: One sheet per class, row-wise day timetable.
+*   `STATE TIME TABLE (19.07.2025)`: Teacher-wise matrix with day blocks and period numbers.
 
 Before uploading an Excel file, choose the matching format from the Excel Format dropdown in the Upload section.
-
-## Subject Mapping CSV (Teacher -> Subject)
-
-You can upload a separate mapping CSV to auto-fill missing subjects.
-
-Required columns:
-
-```csv
-Teacher Name,Teacher ID,Subject
-```
-
-Notes:
-- At least one of `Teacher Name` or `Teacher ID` must be present.
-- `Subject` is required.
-- During timetable import, if a period has teacher info but no subject, the subject is auto-filled from this mapping.
-
-## Timetable Cleanup and Standardization Requirements
-
-### Formatting Corrections
-- Remove extra spaces and unnecessary line breaks within cells.
-- Ensure consistent spacing throughout the document.
-- Remove duplicate rows (for example repeated Grade V A and Grade V B entries).
-- Maintain uniform CSV-compatible formatting (comma-separated values).
-
-### Naming Standardization
-- Standardize teacher names (for example use `Shivathmika` consistently).
-- Standardize subject names and capitalize properly (for example `EVS`, `Science`, `Maths`).
-- Fix inconsistent grade-section labels.
-
-### Class and Section Format
-- Separate Class and Section using a hyphen (`-`).
-- Examples:
-  - `Grade-I-A`
-  - `Grade-II-B`
-
-### Teacher ID Generation
-- Generate a unique Teacher ID for each teacher.
-- Add the Teacher ID as a prefix before the teacher name.
-- Each teacher must have only one unique ID across the entire timetable.
-
-### Separator Rules (Important)
-- Use this structure strictly: `TeacherID:TeacherName:Subject`
-- `:` separates TeacherID and TeacherName
-- `:` separates TeacherName and Subject
-- `-` separates Class and Section
