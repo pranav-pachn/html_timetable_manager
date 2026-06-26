@@ -368,6 +368,7 @@
                     renderTimetable();
                 }
             }
+            updateClassFilters();
         }
 
         function syncConfigInputs() {
@@ -1665,6 +1666,7 @@ Return CSV now.`;
             // Update UI
             updateTimetableSummary();
             renderTimetable();
+            updateClassFilters();
             
             // Show upload status
             document.getElementById('uploadStatus').style.display = 'block';
@@ -3179,7 +3181,7 @@ Return CSV now.`;
             
             // Store period count for time input
             state.tempPeriodCount = numPeriods;
-            state.tempCSVData = [];
+            state.tempCSVData = {};
             
             // Process each data line
             for (let i = 1; i < lines.length; i++) {
@@ -3710,25 +3712,25 @@ Return CSV now.`;
             
             classes.forEach(className => {
                 const classData = state.timetableData[className];
-                if (!isValidTimetableClassData(classData)) return;
-
-                classData.days.forEach(day => {
-                    day.periods.forEach(period => {
-                        const hasSubject = toCleanString(period.subject) !== '';
-                        const hasTeacher = toCleanString(period.teacherName) !== '';
-                        const hasTeacherId = String(period.teacherId || '').trim() !== '';
-                        
-                        if (hasSubject || hasTeacher || hasTeacherId) {
-                            periodsCount++;
-                        }
-                        if (hasTeacher) {
-                            teachers.add(toCleanString(period.teacherName));
-                        }
-                        if (hasSubject) {
-                            subjects.add(toCleanString(period.subject));
-                        }
+                if (classData && classData.days) {
+                    classData.days.forEach(day => {
+                        (day.periods || []).forEach(period => {
+                            const hasSubject = toCleanString(period.subject) !== '';
+                            const hasTeacher = toCleanString(period.teacherName) !== '';
+                            const hasTeacherId = String(period.teacherId || '').trim() !== '';
+                            
+                            if (hasSubject || hasTeacher || hasTeacherId) {
+                                periodsCount++;
+                            }
+                            if (hasTeacher) {
+                                teachers.add(toCleanString(period.teacherName));
+                            }
+                            if (hasSubject) {
+                                subjects.add(toCleanString(period.subject));
+                            }
+                        });
                     });
-                });
+                }
             });
             
             document.getElementById('classesCount').textContent = classes.length;
@@ -3776,14 +3778,14 @@ Return CSV now.`;
             const teachers = new Set();
             Object.keys(state.timetableData).forEach(className => {
                 const classData = state.timetableData[className];
-                if (!isValidTimetableClassData(classData)) return;
-
-                classData.days.forEach(day => {
-                    day.periods.forEach(period => {
-                        const teacherLabel = toCleanString(period.teacherName);
-                        if (teacherLabel) teachers.add(teacherLabel);
+                if (classData && classData.days) {
+                    classData.days.forEach(day => {
+                        (day.periods || []).forEach(period => {
+                            const teacherLabel = toCleanString(period.teacherName);
+                            if (teacherLabel) teachers.add(teacherLabel);
+                        });
                     });
-                });
+                }
             });
             const sortedTeachers = Array.from(teachers)
                 .sort((a, b) => safeLocaleCompare(a, b));
