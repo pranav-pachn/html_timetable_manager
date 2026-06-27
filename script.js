@@ -300,8 +300,8 @@ function setupEventListeners() {
     if ( exportClassesBtn ) exportClassesBtn.addEventListener( 'click', exportClassSectionsCSV );
     const importClassesInput = document.getElementById( 'importClassSectionsFile' );
     if ( importClassesInput ) importClassesInput.addEventListener( 'change', handleImportClassSectionsCSV );
-    const genSubjectsBtn = document.getElementById( 'generateSubjectsBtn' );
-    if ( genSubjectsBtn ) genSubjectsBtn.addEventListener( 'click', generateSubjectsFromInput );
+    const addSubjectBtn = document.getElementById( 'addSubjectRowBtn' );
+    if ( addSubjectBtn ) addSubjectBtn.addEventListener( 'click', addSubjectRow );
     const clearSubjectsBtn = document.getElementById( 'clearSubjectsBtn' );
     if ( clearSubjectsBtn ) clearSubjectsBtn.addEventListener( 'click', clearSubjects );
     const exportSubjectsBtn = document.getElementById( 'exportSubjectsBtn' );
@@ -964,12 +964,21 @@ function saveMasterDataFromTables() {
     const rawTeachers = readTableRows( 'teacherMasterTable', ['id', 'name', 'classTeacherSubject', 'classTeacherGrade', 'classTeacherSection', 'phone', 'email'] );
     const rawMappings = readTableRows( 'teacherMappingTable', ['teacherId', 'gradeSection', 'subject', 'periodsPerWeek', 'fixedPeriods', 'mode'] );
     const rawClassSections = readTableRows( 'classSectionsTable', ['className', 'class', 'section', 'teachingMode', 'combinedGroupId'] );
+    const rawSubjects = readTableRows( 'subjectsTable', ['code', 'name'] );
 
     if ( rawClassSections && rawClassSections.length > 0 ) {
         state.classSections = rawClassSections.map( c => ( {
             ...c,
             className: c.className || `Class-${c.class}-${c.section}`
         } ) ).sort( ( a, b ) => compareGradeSection( a.className, b.className ) );
+    }
+
+    if ( rawSubjects ) {
+        const uniques = new Map();
+        rawSubjects.forEach(s => {
+            if (s.code) uniques.set(toCleanString(s.code), s);
+        });
+        state.subjects = Array.from(uniques.values()).sort( ( a, b ) => safeLocaleCompare( a.code, b.code ) );
     }
 
     duplicateCheckCache.clear();
@@ -1084,6 +1093,15 @@ function saveMasterDataFromTablesWithoutAlert() {
             gradeSection: normalizeClassSectionLabel( mapping.gradeSection )
         } ) )
         .filter( mapping => mapping.gradeSection && mapping.subject && mapping.teacherId );
+
+    const rawSubjects = readTableRows( 'subjectsTable', ['code', 'name'] );
+    if ( rawSubjects ) {
+        const uniques = new Map();
+        rawSubjects.forEach(s => {
+            if (s.code) uniques.set(toCleanString(s.code), s);
+        });
+        state.subjects = Array.from(uniques.values()).sort( ( a, b ) => safeLocaleCompare( a.code, b.code ) );
+    }
     rebuildTeacherSubjectMapFromMasterData();
     saveMasterDataToStorage();
     saveTeacherSubjectMapToStorage();
@@ -1130,9 +1148,18 @@ function addMappingRow() {
 
 // --- Bulk Classes & Sections functions ---
 function generateClassSectionsFromInput() {
-    const input = document.getElementById( 'bulkClassesInput' );
-    if ( !input ) return;
-    const lines = input.value.split( /\r?\n/ ).map( l => l.trim() ).filter( Boolean );
+    const idInput = document.getElementById( 'bulkClassesIdInput' );
+    const detailsInput = document.getElementById( 'bulkClassesDetailsInput' );
+    if ( !idInput || !detailsInput ) return;
+    const idLines = idInput.value.split( /\r?\n/ ).map( l => l.trim() );
+    const detailsLines = detailsInput.value.split( /\r?\n/ ).map( l => l.trim() );
+    const lines = [];
+    const maxLen = Math.max(idLines.length, detailsLines.length);
+    for (let i = 0; i < maxLen; i++) {
+        if (idLines[i]) {
+            lines.push(idLines[i] + ':' + (detailsLines[i] || 'A'));
+        }
+    }
     const parsed = parseBulkClassesInput( lines );
     // merge parsed (objects) with existing, dedupe by className
     const existing = ( state.classSections || [] ).filter( Boolean );
@@ -1206,8 +1233,8 @@ function renderSubjectsTable() {
                 <tbody>
                     ${rows.map( ( subject, i ) => `
                         <tr data-index="${i}">
-                            <td>${escapeHtml( subject.code )}</td>
-                            <td>${escapeHtml( subject.name )}</td>
+                            <td><input type="text" data-field="code" value="${escapeHtml( subject.code )}" placeholder="e.g. MATH"></td>
+                            <td><input type="text" data-field="name" value="${escapeHtml( subject.name )}" placeholder="e.g. Mathematics"></td>
                             <td><button class="btn btn-danger btn-sm" onclick="deleteSubject(${i})"><i class="fas fa-trash"></i></button></td>
                         </tr>
                     `).join( '' )}
@@ -1215,39 +1242,16 @@ function renderSubjectsTable() {
             `;
 }
 
-function getSubjectOptions() {
-    return ( state.subjects || [] ).slice().sort( ( a, b ) => safeLocaleCompare( a.code, b.code ) );
+function addSubjectRow() {
+    saveMasterDataFromTablesWithoutAlert();
+    if (!state.subjects) state.subjects = [];
+    state.subjects.push({ code: '', name: '' });
+    renderSubjectsTable();
+    updateSetupSummary();
 }
 
-function generateSubjectsFromInput() {
-    const input = document.getElementById( 'bulkSubjectsInput' );
-    if ( !input ) return;
-    const lines = input.value.split( /\r?\n/ ).map( l => toCleanString( l ) ).filter( Boolean );
-    const uniques = new Map();
-    ( state.subjects || [] ).forEach( s => uniques.set( toCleanString( s.code ), s ) );
-
-    lines.forEach( line => {
-        const parts = line.split( /[,:]/ );
-        let code = toCleanString( parts[0] );
-        let name = parts.length > 1 ? toCleanString( parts.slice( 1 ).join( line.includes( ',' ) ? ',' : ':' ) ) : code;
-
-        // Smart swap: Subject Codes are typically shorter than Names.
-        if ( code.length > name.length && name.length > 0 ) {
-            const tmp = code;
-            code = name;
-            name = tmp;
-        }
-
-        if ( code ) {
-            uniques.set( toCleanString( code ), { code, name } );
-        }
-    } );
-    state.subjects = Array.from( uniques.values() ).sort( ( a, b ) => safeLocaleCompare( a.code, b.code ) );
-    saveMasterDataToStorage();
-    renderSubjectsTable();
-    renderTeacherMasterTable();
-    renderTeacherMappingTable();
-    alert( 'Generated ' + lines.length + ' subject entries.' );
+function getSubjectOptions() {
+    return ( state.subjects || [] ).slice().sort( ( a, b ) => safeLocaleCompare( a.code, b.code ) );
 }
 
 function clearSubjects() {
@@ -4319,10 +4323,100 @@ function getUniqueSubjectMap() {
 
 function getMultiSelectValues( selectId ) {
     const select = document.getElementById( selectId );
+    if (!select) return [];
     return Array.from( select.selectedOptions )
         .map( option => option.value )
         .filter( value => value && value.trim() !== '' );
 }
+
+function createCheckboxDropdown(selectId, placeholder = "Select options...") {
+    const select = document.getElementById(selectId);
+    if (!select) return;
+    
+    select.style.display = 'none';
+
+    if (select.nextElementSibling && select.nextElementSibling.classList.contains('custom-multiselect')) {
+        select.nextElementSibling.remove();
+    }
+
+    const container = document.createElement('div');
+    container.className = 'custom-multiselect form-control';
+    container.style.position = 'relative';
+    container.style.padding = '0';
+    container.style.cursor = 'pointer';
+    container.style.minWidth = '200px';
+
+    const button = document.createElement('div');
+    button.className = 'multiselect-btn';
+    button.style.padding = '8px 12px';
+    button.style.display = 'flex';
+    button.style.justifyContent = 'space-between';
+    button.style.alignItems = 'center';
+    
+    const selectedOptions = Array.from(select.options).filter(opt => opt.selected && opt.value);
+    button.innerHTML = `<span>${selectedOptions.length > 0 ? selectedOptions.length + ' selected' : placeholder}</span> <i class="fas fa-chevron-down"></i>`;
+
+    const dropdown = document.createElement('div');
+    dropdown.className = 'multiselect-dropdown-content';
+    dropdown.style.display = 'none';
+    dropdown.style.position = 'absolute';
+    dropdown.style.top = '100%';
+    dropdown.style.left = '0';
+    dropdown.style.right = '0';
+    dropdown.style.background = '#fff';
+    dropdown.style.border = '1px solid #ddd';
+    dropdown.style.borderTop = 'none';
+    dropdown.style.maxHeight = '250px';
+    dropdown.style.overflowY = 'auto';
+    dropdown.style.zIndex = '1000';
+    dropdown.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+
+    Array.from(select.options).forEach(opt => {
+        if (!opt.value) return; 
+        const label = document.createElement('label');
+        label.style.display = 'flex';
+        label.style.alignItems = 'center';
+        label.style.padding = '8px 12px';
+        label.style.cursor = 'pointer';
+        label.style.borderBottom = '1px solid #eee';
+        label.style.gap = '8px';
+        label.style.margin = '0';
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = opt.value;
+        checkbox.checked = opt.selected;
+        
+        checkbox.addEventListener('change', (e) => {
+            opt.selected = e.target.checked;
+            const selectedCount = Array.from(select.options).filter(o => o.selected && o.value).length;
+            button.querySelector('span').textContent = selectedCount > 0 ? selectedCount + ' selected' : placeholder;
+            select.dispatchEvent(new Event('change'));
+        });
+
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(opt.text));
+        dropdown.appendChild(label);
+        
+        label.addEventListener('mouseenter', () => label.style.background = '#f8fafc');
+        label.addEventListener('mouseleave', () => label.style.background = '#fff');
+    });
+
+    button.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = dropdown.style.display === 'block';
+        document.querySelectorAll('.multiselect-dropdown-content').forEach(d => d.style.display = 'none');
+        dropdown.style.display = isOpen ? 'none' : 'block';
+    });
+
+    container.appendChild(button);
+    container.appendChild(dropdown);
+    select.parentNode.insertBefore(container, select.nextSibling);
+}
+
+document.addEventListener('click', () => {
+    document.querySelectorAll('.multiselect-dropdown-content').forEach(d => d.style.display = 'none');
+});
 
 // Update timetable summary
 function updateTimetableSummary() {
@@ -4444,6 +4538,10 @@ function updateClassFilters() {
     if ( selectedSubjects.length === 0 ) {
         subjectFilter.selectedIndex = -1;
     }
+
+    createCheckboxDropdown('classFilter', 'Select Classes');
+    createCheckboxDropdown('teacherFilter', 'Select Teachers');
+    createCheckboxDropdown('subjectFilter', 'Select Subjects');
 }
 
 // Render timetable
