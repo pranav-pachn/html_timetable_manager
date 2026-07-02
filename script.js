@@ -2345,15 +2345,39 @@ function normalizeSingleClassSectionLabel( cleaned ) {
     return raw;
 }
 
-function getStandardDayOrder() {
-    return ( state.config && state.config.schoolDays && state.config.schoolDays.length > 0 )
+function getStandardDayOrder( className = null ) {
+    const baseDays = ( state.config && state.config.schoolDays && state.config.schoolDays.length > 0 )
         ? state.config.schoolDays
         : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
+    if ( className ) {
+        const isTenth = className.includes('Grade-X') || className.includes('Grade-10') || className.includes('Class-10') || className.includes('-10-') || className.startsWith('10-') || className === '10';
+        if ( isTenth && !baseDays.includes('Saturday') ) {
+            return [...baseDays, 'Saturday'];
+        }
+    }
+
+    return baseDays;
 }
 
 function getAllActiveDays() {
     const days = [...getStandardDayOrder()];
     const daySet = new Set( days );
+
+    let hasTenthGrade = false;
+    if (state.classSections && state.classSections.some(c => {
+        const str = typeof c === 'string' ? c : (c.className || '');
+        return str.includes('Grade-X') || str.includes('Grade-10') || str.includes('Class-10') || str.includes('-10-') || str.startsWith('10-') || str === '10';
+    })) {
+        hasTenthGrade = true;
+    } else if (state.timetableData && Object.keys(state.timetableData).some(c => c.includes('Grade-X') || c.includes('Grade-10') || c.includes('Class-10') || c.includes('-10-') || c.startsWith('10-') || c === '10')) {
+        hasTenthGrade = true;
+    }
+    if (hasTenthGrade && !daySet.has('Saturday')) {
+        days.push('Saturday');
+        daySet.add('Saturday');
+    }
+
     if ( typeof CSL_FIXED_SCHEDULE !== 'undefined' ) {
         Object.values( CSL_FIXED_SCHEDULE ).forEach( slots => {
             slots.forEach( slot => {
@@ -2394,7 +2418,7 @@ function isLegacyFlatTimetableEntry( classData ) {
 
 /** Convert legacy flat timetable entries into the canonical app structure. */
 function migrateLegacyFlatTimetableEntry( className, classData ) {
-    const schoolDays = getStandardDayOrder();
+    const schoolDays = getStandardDayOrder( className );
     const periodsPerDay = state.config.periodsPerDay || 8;
 
     return {
@@ -2751,7 +2775,7 @@ function exceedsDailySubjectLimit( className, dayName, subject, additionalPeriod
 function scoreCandidateSlot( timetable, task, dayName, periodNumbers, options ) {
     let score = 100;
     const subjectKey = normalizeSubjectCode( task.subject );
-    const schoolDays = getStandardDayOrder();
+    const schoolDays = getStandardDayOrder( task.className );
     const dailyCount = getDailySubjectCount( task.className, dayName, task.subject );
 
     if ( dailyCount === 0 ) score += 40;
@@ -2807,7 +2831,7 @@ function scoreCandidateSlot( timetable, task, dayName, periodNumbers, options ) 
 function findBestCandidateSlot( timetable, task, periodNumbers, options, maxTeacherPeriods, labBlockList, searchAllPeriods ) {
     const candidates = [];
     const periodsPerDay = state.config.periodsPerDay || 8;
-    const schoolDays = getStandardDayOrder();
+    const schoolDays = getStandardDayOrder( task.className );
     const slotPatterns = [];
 
     if ( labBlockList && labBlockList.length > 0 ) {
@@ -3101,7 +3125,6 @@ function taskRequiresFixedPeriodOne( task ) {
 
 /** Lock empty P1 slots so later schedulers cannot place other subjects there. */
 function reserveClassP1Slots( timetable, tasks ) {
-    const schoolDays = getStandardDayOrder();
     const reservedClasses = new Set();
 
     tasks.forEach( task => {
@@ -3113,6 +3136,7 @@ function reserveClassP1Slots( timetable, tasks ) {
         if ( reservedClasses.has( task.className ) ) return;
         reservedClasses.add( task.className );
 
+        const schoolDays = getStandardDayOrder( task.className );
         schoolDays.forEach( dayName => {
             const periodEntry = getClassDayPeriod( timetable, task.className, dayName, 1 );
             if ( periodEntry && isPeriodSlotEmpty( periodEntry ) ) {
@@ -3178,7 +3202,7 @@ function canAssignFixedP1Slot( timetable, className, dayName, periodNumber, teac
 
 /** Enumerate day/period combinations, optionally prioritising fixed period numbers. */
 function getSlotCandidates( className, preferredPeriodNumbers ) {
-    const schoolDays = getStandardDayOrder();
+    const schoolDays = getStandardDayOrder( className );
     const periodsPerDay = state.config.periodsPerDay || 8;
     const candidates = [];
     const seen = new Set();
@@ -3646,7 +3670,7 @@ function buildSchedulingTasks( unresolvedOut = [] ) {
 
 function findBestClubbedCandidateSlot( timetable, task, maxTeacherPeriods, labBlockList ) {
     const candidates = [];
-    const schoolDays = getStandardDayOrder();
+    const schoolDays = getStandardDayOrder( task.className );
     const slotPatterns = [];
 
     if ( labBlockList && labBlockList.length > 0 ) {
@@ -4038,9 +4062,8 @@ function scheduleLabBlock( timetable, task, unscheduled ) {
 
 function scheduleClassTeacherP1AfterLabs( timetable, tasks, unscheduled ) {
     const maxTeacherPeriods = state.config.periodsPerTeacher || 35;
-    const schoolDays = getStandardDayOrder();
-
     tasks.forEach( task => {
+        const schoolDays = getStandardDayOrder( task.className );
         if ( task.alreadyScheduled ) return;
         if ( !isClassTeacherP1Task( task ) ) return;
         if ( task.isClubbed ) return;
@@ -4088,9 +4111,8 @@ function scheduleClassTeacherP1AfterLabs( timetable, tasks, unscheduled ) {
 /** Schedule all fixed-period mappings first (class-teacher P1 slots, etc.). */
 function scheduleFixedTasks( timetable, tasks, deferredTasks, unscheduled ) {
     const maxTeacherPeriods = state.config.periodsPerTeacher || 35;
-    const schoolDays = getStandardDayOrder();
-
     tasks.forEach( task => {
+        const schoolDays = getStandardDayOrder( task.className );
         if ( task.alreadyScheduled ) return;
         console.log( 'Scheduling fixed task', task );
 
@@ -4208,9 +4230,8 @@ function scheduleFixedTasks( timetable, tasks, deferredTasks, unscheduled ) {
 /** Schedule fixed-period tasks that are also combined classes. */
 function scheduleFixedCombinedTasks( timetable, tasks, deferredTasks, unscheduled ) {
     const maxTeacherPeriods = state.config.periodsPerTeacher || 35;
-    const schoolDays = getStandardDayOrder();
-
     tasks.forEach( task => {
+        const schoolDays = getStandardDayOrder( task.className );
         if ( task.alreadyScheduled ) return;
         console.log( "Scheduling fixed combined task:", task );
 
@@ -4511,7 +4532,7 @@ function trySwapAndPlace( timetable, retryTask, maxTeacherPeriods, attemptContex
     const classData = timetable[retryTask.className];
     if ( !classData || !Array.isArray( classData.days ) ) return false;
 
-    const validDays = new Set( getStandardDayOrder() );
+    const validDays = new Set( getAllActiveDays() );
     const daysToEvaluate = classData.days.filter( d => validDays.has( d.dayName ) );
 
     // Strategy 1: Find an occupied slot in this class where retryTask's teacher is free.
@@ -4811,11 +4832,11 @@ function findBestCandidateForSingleCell(timetable, className, dayName, period, t
 }
 
 function fillAllEmptyPeriods( timetable, remainingTasks ) {
-    const days = getStandardDayOrder();
     const periodsPerDay = state.config.periodsPerDay || 8;
 
     for ( const className of Object.keys( timetable ) ) {
-        for ( const dayName of days ) {
+        const classDays = getStandardDayOrder( className );
+        for ( const dayName of classDays ) {
             for ( let p = 1; p <= periodsPerDay; p++ ) {
                 const cell = getClassDayPeriod( timetable, className, dayName, p );
                 if ( !cell || cell.isLocked || !isPeriodSlotEmpty( cell ) ) continue;
