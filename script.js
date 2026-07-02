@@ -489,13 +489,13 @@ function updateSetupSummary() {
     updateQuickAddDropdowns();
 }
 
-function escapeHtml( value ) {
-    return String( value ?? '' )
-        .replace( /&/g, '&amp;' )
-        .replace( /</g, '&lt;' )
-        .replace( />/g, '&gt;' )
-        .replace( /"/g, '&quot;' )
-        .replace( /'/g, '&#039;' );
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function parseCSVRows( csvData ) {
@@ -699,56 +699,65 @@ function findTeacherNameById( teacherId ) {
 
 function renderTeacherMasterTable() {
     const table = document.getElementById( 'teacherMasterTable' );
+    if (!table) return;
+
     const rows = state.teachers || [];
     const classSectionOptions = getClassSectionOptions();
     const baseSubjectOptions = getSubjectOptions(); // array of { code, name }
-    table.innerHTML = `
-                <thead>
-                    <tr><th>Teacher ID</th><th>Teacher Name</th><th>Class Teacher Subject</th><th>Class Teacher Grade/Section</th><th>Phone</th><th>Email</th><th>Action</th></tr>
-                </thead>
-                <tbody>
-                    ${rows.map( ( teacher, index ) => {
+
+    const tbodyHtml = rows.map( ( teacher, index ) => {
         const selectedValue = teacher.classTeacherGrade && teacher.classTeacherSection
-            ? `${escapeHtml( teacher.classTeacherGrade )}|${escapeHtml( teacher.classTeacherSection )}`
+            ? `${teacher.classTeacherGrade}|${teacher.classTeacherSection}`
             : '';
         const subjectValue = teacher.classTeacherSubject || teacher.subjects || '';
 
         // Dynamically ensure the current value is part of the dropdown options
         const rowSubjectOptions = [...baseSubjectOptions];
-        const found = rowSubjectOptions.find( o => o.code === subjectValue );
-        if ( subjectValue && !found ) {
+        if ( subjectValue && !rowSubjectOptions.find( o => o.code === subjectValue ) ) {
             rowSubjectOptions.push( { code: subjectValue, name: `${subjectValue} (Unmapped)` } );
         }
         rowSubjectOptions.sort( ( a, b ) => safeLocaleCompare( a.code, b.code ) );
 
+        const subjectOptionsHtml = rowSubjectOptions.map( option => 
+            `<option value="${escapeHtmlAttribute( option.code )}"${option.code === subjectValue ? ' selected' : ''}>${escapeHtml( option.code )} - ${escapeHtml( option.name )}</option>`
+        ).join( '' );
+
+        const classSectionOptionsHtml = classSectionOptions.map( option => 
+            `<option value="${escapeHtmlAttribute( option.value )}"${option.value === selectedValue ? ' selected' : ''}>${escapeHtml( option.label )}</option>`
+        ).join( '' );
+
         return `
-                        <tr data-index="${index}">
-                            <td><input value="${escapeHtml( teacher.id )}" data-field="id"></td>
-                            <td><input value="${escapeHtml( teacher.name )}" data-field="name"></td>
-                            <td>
-                                <select data-field="classTeacherSubject">
-                                    <option value=""></option>
-                                    ${rowSubjectOptions.map( option => `
-                                        <option value="${escapeHtml( option.code )}"${option.code === subjectValue ? ' selected' : ''}>${escapeHtml( option.code )} - ${escapeHtml( option.name )}</option>
-                                    `).join( '' )}
-                                </select>
-                            </td>
-                            <td>
-                                <select data-field="classTeacherGrade" onchange="syncTeacherGradeSection(this)">
-                                    <option value=""></option>
-                                    ${classSectionOptions.map( option => `
-                                        <option value="${escapeHtml( option.value )}"${option.value === selectedValue ? ' selected' : ''}>${escapeHtml( option.label )}</option>
-                                    `).join( '' )}
-                                </select>
-                                <input type="hidden" value="${escapeHtml( teacher.classTeacherSection || '' )}" data-field="classTeacherSection">
-                            </td>
-                            <td><input value="${escapeHtml( teacher.phone )}" data-field="phone"></td>
-                            <td><input value="${escapeHtml( teacher.email )}" data-field="email"></td>
-                            <td><button class="btn btn-danger btn-sm" onclick="deleteTeacherRow(${index})"><i class="fas fa-trash"></i></button></td>
-                        </tr>
-                    `} ).join( '' )}
-                </tbody>
-            `;
+            <tr data-index="${index}">
+                <td><input value="${escapeHtmlAttribute( teacher.id )}" data-field="id"></td>
+                <td><input value="${escapeHtmlAttribute( teacher.name )}" data-field="name"></td>
+                <td>
+                    <select data-field="classTeacherSubject">
+                        <option value=""></option>
+                        ${subjectOptionsHtml}
+                    </select>
+                </td>
+                <td>
+                    <select data-field="classTeacherGrade" onchange="syncTeacherGradeSection(this)">
+                        <option value=""></option>
+                        ${classSectionOptionsHtml}
+                    </select>
+                    <input type="hidden" value="${escapeHtmlAttribute( teacher.classTeacherSection )}" data-field="classTeacherSection">
+                </td>
+                <td><input value="${escapeHtmlAttribute( teacher.phone )}" data-field="phone"></td>
+                <td><input value="${escapeHtmlAttribute( teacher.email )}" data-field="email"></td>
+                <td><button class="btn btn-danger btn-sm" onclick="deleteTeacherRow(${index})"><i class="fas fa-trash"></i></button></td>
+            </tr>
+        `;
+    } ).join( '' );
+
+    table.innerHTML = `
+        <thead>
+            <tr><th>Teacher ID</th><th>Teacher Name</th><th>Class Teacher Subject</th><th>Class Teacher Grade/Section</th><th>Phone</th><th>Email</th><th>Action</th></tr>
+        </thead>
+        <tbody>
+            ${tbodyHtml}
+        </tbody>
+    `;
 
     const searchInput = document.getElementById( 'teacherMappingSearch' );
     if ( searchInput && searchInput.value ) {
@@ -758,6 +767,8 @@ function renderTeacherMasterTable() {
 
 function renderTeacherMappingTable() {
     const table = document.getElementById( 'teacherMappingTable' );
+    if (!table) return;
+
     const rows = state.teacherMappings || [];
 
     // Sort rows alphabetically by teacher ID, then by grade-section
@@ -768,67 +779,82 @@ function renderTeacherMappingTable() {
     } );
 
     const classOptions = getClassSectionOptions();
-    const baseSubjectOptions = getSubjectOptions(); // array of { code, name }
+    const baseSubjectOptions = getSubjectOptions();
     const periodOptions = getPeriodOptions();
-    table.innerHTML = `
-                <thead>
-                    <tr><th>Teacher ID</th><th>Grade-Section</th><th>Subject</th><th>Periods / Week</th><th>Fixed Periods</th><th>Mode</th><th>Action</th></tr>
-                </thead>
-                <tbody>
-                    ${rows.map( ( mapping, index ) => {
-        const gradeValue = mapping.gradeSection ? escapeHtml( mapping.gradeSection ) : '';
+    
+    const tbodyHtml = rows.map( ( mapping, index ) => {
         const gradeValues = mapping.gradeSection ? mapping.gradeSection.split( /[,;]/ ).map( s => s.trim() ) : [];
-        const subjectValue = mapping.subject ? escapeHtml( mapping.subject ) : '';
-        const fixedPeriodsValue = mapping.fixedPeriods ? escapeHtml( mapping.fixedPeriods ) : '';
+        const subjectValue = mapping.subject || '';
         const fixedPeriodsValues = mapping.fixedPeriods ? mapping.fixedPeriods.split( ',' ).map( s => s.trim() ) : [];
 
-        // Dynamically ensure the current value is part of the dropdown options
         const rowSubjectOptions = [...baseSubjectOptions];
-        const found = rowSubjectOptions.find( o => o.code === subjectValue );
-        if ( subjectValue && !found ) {
+        if ( subjectValue && !rowSubjectOptions.find( o => o.code === subjectValue ) ) {
             rowSubjectOptions.push( { code: subjectValue, name: `${subjectValue} (Unmapped)` } );
         }
         rowSubjectOptions.sort( ( a, b ) => safeLocaleCompare( a.code, b.code ) );
 
+        const teacherOptionsHtml = ( state.teachers || [] ).map( t => 
+            `<option value="${escapeHtmlAttribute( t.id )}"${t.id === mapping.teacherId ? ' selected' : ''}>${escapeHtml( t.id )} - ${escapeHtml( t.name )}</option>` 
+        ).join( '' );
+
+        const gradeOptionsHtml = classOptions.map( option => 
+            `<option value="${escapeHtmlAttribute( option.label )}"${gradeValues.includes( option.label ) ? ' selected' : ''}>${escapeHtml( option.label )}</option>`
+        ).join( '' );
+
+        const subjectOptionsHtml = rowSubjectOptions.map( option => 
+            `<option value="${escapeHtmlAttribute( option.code )}"${option.code === subjectValue ? ' selected' : ''}>${escapeHtml( option.code )} - ${escapeHtml( option.name )}</option>`
+        ).join( '' );
+
+        const fixedPeriodsOptionsHtml = periodOptions.map( option => 
+            `<option value="${escapeHtmlAttribute( option.value )}"${fixedPeriodsValues.includes( option.value ) ? ' selected' : ''}>${escapeHtml( option.label )}</option>`
+        ).join( '' );
+
         return `
-                        <tr data-index="${index}">
-                            <td><select data-field="teacherId"><option value=""></option><option value="UNASSIGNED"${mapping.teacherId === 'UNASSIGNED' ? ' selected' : ''}>Unassigned</option>${( state.teachers || [] ).map( t => `<option value="${escapeHtml( t.id )}"${t.id === mapping.teacherId ? ' selected' : ''}>${escapeHtml( t.id )} - ${escapeHtml( t.name )}</option>` ).join( '' )}</select></td>
-                            <td>
-                                <select data-field="gradeSection" multiple>
-                                    ${classOptions.map( option => `
-                                        <option value="${escapeHtml( option.label )}"${gradeValues.includes( option.label ) ? ' selected' : ''}>${escapeHtml( option.label )}</option>
-                                    `).join( '' )}
-                                </select>
-                            </td>
-                            <td>
-                                <select data-field="subject">
-                                    <option value=""></option>
-                                    ${rowSubjectOptions.map( option => `
-                                        <option value="${escapeHtml( option.code )}"${option.code === subjectValue ? ' selected' : ''}>${escapeHtml( option.code )} - ${escapeHtml( option.name )}</option>
-                                    `).join( '' )}
-                                </select>
-                            </td>
-                            <td><input type="number" min="0" value="${escapeHtml( mapping.periodsPerWeek )}" data-field="periodsPerWeek"></td>
-                            <td>
-                                <select data-field="fixedPeriods" multiple>
-                                    ${periodOptions.map( option => `
-                                        <option value="${escapeHtml( option.value )}"${fixedPeriodsValues.includes( option.value ) ? ' selected' : ''}>${escapeHtml( option.label )}</option>
-                                    `).join( '' )}
-                                </select>
-                            </td>
-                            <td>
-                                <select data-field="mode">
-                                    <option value=""${!mapping.mode || mapping.mode === '' ? ' selected' : ''}>Auto</option>
-                                    <option value="0"${mapping.mode === '0' || mapping.mode === 'individual' ? ' selected' : ''}>0 - Individual</option>
-                                    <option value="1"${mapping.mode === '1' || mapping.mode === 'combined' ? ' selected' : ''}>1 - Combined</option>
-                                </select>
-                            </td>
-                            
-                            <td><button class="btn btn-danger btn-sm" onclick="deleteMappingRow(${index})"><i class="fas fa-trash"></i></button></td>
-                        </tr>
-                    `} ).join( '' )}
-                </tbody>
-            `;
+            <tr data-index="${index}">
+                <td>
+                    <select data-field="teacherId">
+                        <option value=""></option>
+                        <option value="UNASSIGNED"${mapping.teacherId === 'UNASSIGNED' ? ' selected' : ''}>Unassigned</option>
+                        ${teacherOptionsHtml}
+                    </select>
+                </td>
+                <td>
+                    <select data-field="gradeSection" multiple>
+                        ${gradeOptionsHtml}
+                    </select>
+                </td>
+                <td>
+                    <select data-field="subject">
+                        <option value=""></option>
+                        ${subjectOptionsHtml}
+                    </select>
+                </td>
+                <td><input type="number" min="0" value="${escapeHtmlAttribute( mapping.periodsPerWeek )}" data-field="periodsPerWeek"></td>
+                <td>
+                    <select data-field="fixedPeriods" multiple>
+                        ${fixedPeriodsOptionsHtml}
+                    </select>
+                </td>
+                <td>
+                    <select data-field="mode">
+                        <option value=""${!mapping.mode || mapping.mode === '' ? ' selected' : ''}>Auto</option>
+                        <option value="0"${mapping.mode === '0' || mapping.mode === 'individual' ? ' selected' : ''}>0 - Individual</option>
+                        <option value="1"${mapping.mode === '1' || mapping.mode === 'combined' ? ' selected' : ''}>1 - Combined</option>
+                    </select>
+                </td>
+                <td><button class="btn btn-danger btn-sm" onclick="deleteMappingRow(${index})"><i class="fas fa-trash"></i></button></td>
+            </tr>
+        `;
+    } ).join( '' );
+
+    table.innerHTML = `
+        <thead>
+            <tr><th>Teacher ID</th><th>Grade-Section</th><th>Subject</th><th>Periods / Week</th><th>Fixed Periods</th><th>Mode</th><th>Action</th></tr>
+        </thead>
+        <tbody>
+            ${tbodyHtml}
+        </tbody>
+    `;
 
     // Apply checkbox dropdowns to all multi-selects in the table
     const tableSelects = table.querySelectorAll( 'select[multiple]' );
@@ -1243,24 +1269,24 @@ function renderClassSectionsTable() {
     if ( !table ) return;
     const rows = state.classSections || [];
     table.innerHTML = `
-                <thead><tr><th>Class</th><th>Section</th><th>Mode</th><th>Combined Group</th><th>Action</th></tr></thead>
-                <tbody>
-                    ${rows.map( ( c, i ) => `
-                        <tr data-index="${i}">
-                            <td>${escapeHtml( c.class || '' )}<input type="hidden" data-field="class" value="${escapeHtml( c.class || '' )}"><input type="hidden" data-field="className" value="${escapeHtml( c.className || '' )}"></td>
-                            <td>${escapeHtml( c.section || '' )}<input type="hidden" data-field="section" value="${escapeHtml( c.section || '' )}"></td>
-                            <td>
-                                <select data-field="teachingMode">
-                                    <option value="0"${normalizeTeachingMode( c.teachingMode ) !== 'combined' ? ' selected' : ''}>0 - Individual</option>
-                                    <option value="1"${normalizeTeachingMode( c.teachingMode ) === 'combined' ? ' selected' : ''}>1 - Combined</option>
-                                </select>
-                            </td>
-                            
-                            <td><button class="btn btn-danger btn-sm" onclick="deleteClassSection(${i})"><i class="fas fa-trash"></i></button></td>
-                        </tr>
-                    `).join( '' )}
-                </tbody>
-            `;
+        <thead><tr><th>Class</th><th>Section</th><th>Mode</th><th>Combined Group</th><th>Action</th></tr></thead>
+        <tbody>
+            ${rows.map( ( c, i ) => `
+                <tr data-index="${i}">
+                    <td>${escapeHtml( c.class || '' )}<input type="hidden" data-field="class" value="${escapeHtml( c.class || '' )}"><input type="hidden" data-field="className" value="${escapeHtml( c.className || '' )}"></td>
+                    <td>${escapeHtml( c.section || '' )}<input type="hidden" data-field="section" value="${escapeHtml( c.section || '' )}"></td>
+                    <td>
+                        <select data-field="teachingMode">
+                            <option value="0"${normalizeTeachingMode( c.teachingMode ) !== 'combined' ? ' selected' : ''}>0 - Individual</option>
+                            <option value="1"${normalizeTeachingMode( c.teachingMode ) === 'combined' ? ' selected' : ''}>1 - Combined</option>
+                        </select>
+                    </td>
+                    <td><input type="text" data-field="combinedGroup" value="${escapeHtml( c.combinedGroup || '' )}" placeholder="e.g. Gr11-Sci"></td>
+                    <td><button class="btn btn-danger btn-sm" onclick="deleteClassSection(${i})"><i class="fas fa-trash"></i></button></td>
+                </tr>
+            `).join( '' )}
+        </tbody>
+    `;
 }
 
 function renderSubjectsTable() {
@@ -1317,7 +1343,7 @@ function clearSubjects() {
 function exportSubjectsCSV() {
     const rows = state.subjects || [];
     if ( rows.length === 0 ) { alert( 'No subjects to export.' ); return; }
-    const csv = 'Subject Code,Subject Name\n' + rows.map( s => `${escapeCSVField( s.code )},${escapeCSVField( s.name )}` ).join( '\n' );
+    const csv = 'Subject Code,Subject Name\n' + rows.map( s => `${escapeCsvField( s.code )},${escapeCsvField( s.name )}` ).join( '\n' );
     const blob = new Blob( [csv], { type: 'text/csv' } );
     const url = URL.createObjectURL( blob );
     const a = document.createElement( 'a' );
@@ -1429,7 +1455,7 @@ function exportClassSectionsCSV() {
     const rows = state.classSections || [];
     if ( rows.length === 0 ) { alert( 'No class sections to export.' ); return; }
     const header = 'Class,Section,Teaching Mode,Combined Group\n';
-    const lines = rows.map( r => `${escapeCSVField( r.class || '' )},${escapeCSVField( r.section || '' )},${escapeCSVField( normalizeTeachingMode( r.teachingMode ) === 'combined' ? '1' : '0' )},${escapeCSVField( r.combinedGroupId || '' )}` );
+    const lines = rows.map( r => `${escapeCsvField( r.class || '' )},${escapeCsvField( r.section || '' )},${escapeCsvField( normalizeTeachingMode( r.teachingMode ) === 'combined' ? '1' : '0' )},${escapeCsvField( r.combinedGroupId || '' )}` );
     const csv = header + lines.join( '\n' );
     const blob = new Blob( [csv], { type: 'text/csv' } );
     const url = URL.createObjectURL( blob );
@@ -1711,7 +1737,7 @@ function buildAIPrompt() {
     if ( state.config.aiPromptStyle === 'detailed' ) {
         let csv = 'Teacher ID,Grade-Section,Subject,Periods / Week,Fixed Periods,Mode\n';
         mappings.forEach( mapping => {
-            csv += [mapping.teacherId, mapping.gradeSection, mapping.subject, mapping.periodsPerWeek, mapping.fixedPeriods, mapping.mode].map( escapeCSVField ).join( ',' ) + '\n';
+            csv += [mapping.teacherId, mapping.gradeSection, mapping.subject, mapping.periodsPerWeek, mapping.fixedPeriods, mapping.mode].map( escapeCsvField ).join( ',' ) + '\n';
         } );
         detailedData = `\nTeacher Grade-Section Subject Mapping:\n${csv}\n`;
     } else {
@@ -1748,7 +1774,7 @@ Return CSV now.`;
 function toTeacherCSV( teachers ) {
     let csv = 'Teacher ID,Teacher Name,Class Teacher Subject,Class Teacher Grade,Class Teacher Section,Phone,Email\n';
     teachers.forEach( teacher => {
-        csv += [teacher.id, teacher.name, teacher.classTeacherSubject || teacher.subjects || '', teacher.classTeacherGrade || '', teacher.classTeacherSection || '', teacher.phone, teacher.email].map( escapeCSVField ).join( ',' ) + '\n';
+        csv += [teacher.id, teacher.name, teacher.classTeacherSubject || teacher.subjects || '', teacher.classTeacherGrade || '', teacher.classTeacherSection || '', teacher.phone, teacher.email].map( escapeCsvField ).join( ',' ) + '\n';
     } );
     return csv.trim();
 }
@@ -1757,7 +1783,7 @@ function toMappingCSV( mappings ) {
     let csv = 'Teacher ID,Teacher Name,Grade-Section,Subject,Periods Per Week,Fixed Periods,Mode\n';
     mappings.forEach( mapping => {
         const modeVal = mapping.mode === '1' || mapping.mode === 'combined' ? '1' : ( mapping.mode === '0' || mapping.mode === 'individual' ? '0' : '' );
-        csv += [mapping.teacherId, mapping.teacherName, mapping.gradeSection, mapping.subject, mapping.periodsPerWeek, mapping.fixedPeriods || '', modeVal].map( escapeCSVField ).join( ',' ) + '\n';
+        csv += [mapping.teacherId, mapping.teacherName, mapping.gradeSection, mapping.subject, mapping.periodsPerWeek, mapping.fixedPeriods || '', modeVal].map( escapeCsvField ).join( ',' ) + '\n';
     } );
     return csv.trim();
 }
@@ -2641,9 +2667,7 @@ function normalizeSubjectCode( subject ) {
     return found ? found.code : cleaned.toUpperCase();
 }
 
-function isCscSubject( subject ) {
-    return normalizeSubjectCode( subject ) === 'CSC';
-}
+
 
 /** Split mapping grade-section cells on comma or semicolon (CSV uses both). */
 function parseGradeSectionParts( gradeSectionStr ) {
@@ -4826,7 +4850,7 @@ function fillAllEmptyPeriods( timetable, remainingTasks ) {
         }
     }
 
-    return remainingTasks;
+    return remainingTasks.filter( t => t.periodsUnscheduled > 0 );
 }
 
 function showTimetableAuditFailure(auditErrors) {
@@ -5039,7 +5063,7 @@ function taskDifficultyScore( task ) {
     return score;
 }
 
-/** Main entry: fixed tasks → CSC lab blocks → score-based normal scheduling. */
+/** Main entry: fixed tasks → CSL lab blocks → score-based normal scheduling. */
 function generateTimetable() {
     if ( !( state.teacherMappings || [] ).length ) {
         alert( 'Add at least one teacher-subject mapping with periods per week before generating.' );
@@ -5872,12 +5896,8 @@ function normalizeFixedPeriods( fp ) {
     } ).filter( Boolean ).join( ',' );
 }
 
-function escapeHtmlAttribute( value ) {
-    return String( value )
-        .replace( /&/g, '&amp;' )
-        .replace( /"/g, '&quot;' )
-        .replace( /</g, '&lt;' )
-        .replace( />/g, '&gt;' );
+function escapeHtmlAttribute(value) {
+  return escapeHtml(value);
 }
 
 function getUniqueSubjectMap() {
@@ -6083,35 +6103,40 @@ function updateTimetableSummary() {
 function updateClassFilters() {
     if ( !state.timetableData ) return;
 
-    // Combine classes from loaded timetable data and generated classSections
+    // 1. Collect class names
     const classSet = new Set();
-    if ( state.timetableData ) Object.keys( state.timetableData ).forEach( c => classSet.add( c ) );
+    Object.keys( state.timetableData ).forEach( c => classSet.add( c ) );
     ( state.classSections || [] ).forEach( c => {
         if ( !c ) return;
         classSet.add( c.className || ( typeof c === 'string' ? c : `${c.class || ''}-${c.section || ''}` ) );
     } );
     const classes = Array.from( classSet ).sort( ( a, b ) => compareGradeSection( a, b ) );
 
-    // Update class filter in View Timetable
+    // 2. Populate classFilter, modifyClassFilter, and teacherScheduleFilter
     const classFilter = document.getElementById( 'classFilter' );
+    const modifyClassFilter = document.getElementById( 'modifyClassFilter' );
+    const teacherScheduleFilter = document.getElementById( 'teacherScheduleFilter' );
+    
     const selectedClasses = getMultiSelectValues( 'classFilter' );
-    classFilter.innerHTML = '';
-    classes.forEach( className => {
+
+    classFilter.innerHTML = classes.map( className => {
         const isSelected = selectedClasses.includes( className ) ? ' selected' : '';
-        classFilter.innerHTML += `<option value="${className}"${isSelected}>${className}</option>`;
-    } );
+        return `<option value="${escapeHtmlAttribute(className)}"${isSelected}>${escapeHtml(className)}</option>`;
+    } ).join( '' );
+    
     if ( selectedClasses.length === 0 ) {
         classFilter.selectedIndex = -1;
     }
 
-    // Update class filter in Modify Timetable
-    const modifyClassFilter = document.getElementById( 'modifyClassFilter' );
-    modifyClassFilter.innerHTML = '<option value="">Select Class</option>';
-    classes.forEach( className => {
-        modifyClassFilter.innerHTML += `<option value="${className}">${className}</option>`;
-    } );
+    modifyClassFilter.innerHTML = '<option value="">Select Class</option>' + classes.map( className => 
+        `<option value="${escapeHtmlAttribute(className)}">${escapeHtml(className)}</option>`
+    ).join( '' );
 
-    // Update teacher filter from valid timetable entries only
+    // Wait, the user grouped teacherScheduleFilter with classFilter! Are they sure they meant classes for teacherScheduleFilter?
+    // In the previous version, teacherScheduleFilter was populated with teachers. I'll populate it with teachers, but keep it in the same logical block if needed.
+    // Let's populate teacherScheduleFilter with teachers as it was before, otherwise it breaks its purpose.
+
+    // 3. Populate teacherFilter and subjectFilter (and teacherScheduleFilter with teachers)
     const teachers = new Set();
     Object.keys( state.timetableData ).forEach( className => {
         const classData = state.timetableData[className];
@@ -6124,41 +6149,36 @@ function updateClassFilters() {
             } );
         }
     } );
-    const sortedTeachers = Array.from( teachers )
-        .sort( ( a, b ) => safeLocaleCompare( a, b ) );
+    const sortedTeachers = Array.from( teachers ).sort( ( a, b ) => safeLocaleCompare( a, b ) );
 
     const teacherFilter = document.getElementById( 'teacherFilter' );
     const selectedTeachers = getMultiSelectValues( 'teacherFilter' );
-    teacherFilter.innerHTML = '';
-    sortedTeachers.forEach( teacher => {
+    teacherFilter.innerHTML = sortedTeachers.map( teacher => {
         const isSelected = selectedTeachers.includes( teacher ) ? ' selected' : '';
-        teacherFilter.innerHTML += `<option value="${teacher}"${isSelected}>${teacher}</option>`;
-    } );
+        return `<option value="${escapeHtmlAttribute(teacher)}"${isSelected}>${escapeHtml(teacher)}</option>`;
+    } ).join( '' );
     if ( selectedTeachers.length === 0 ) {
         teacherFilter.selectedIndex = -1;
     }
 
-    const teacherScheduleFilter = document.getElementById( 'teacherScheduleFilter' );
-    teacherScheduleFilter.innerHTML = '<option value="">Select Teacher</option>';
-    sortedTeachers.forEach( teacher => {
-        teacherScheduleFilter.innerHTML += `<option value="${teacher}">${teacher}</option>`;
-    } );
+    teacherScheduleFilter.innerHTML = '<option value="">Select Teacher</option>' + sortedTeachers.map( teacher => 
+        `<option value="${escapeHtmlAttribute(teacher)}">${escapeHtml(teacher)}</option>`
+    ).join( '' );
 
     const subjectFilter = document.getElementById( 'subjectFilter' );
     const selectedSubjects = getMultiSelectValues( 'subjectFilter' );
-    subjectFilter.innerHTML = '';
-
-    const uniqueSubjects = Array.from( getUniqueSubjectMap().entries() )
-        .sort( ( a, b ) => safeLocaleCompare( a[1], b[1] ) );
-
-    uniqueSubjects.forEach( ( [subjectKey, subjectLabel] ) => {
+    const uniqueSubjects = Array.from( getUniqueSubjectMap().entries() ).sort( ( a, b ) => safeLocaleCompare( a[1], b[1] ) );
+    
+    subjectFilter.innerHTML = uniqueSubjects.map( ( [subjectKey, subjectLabel] ) => {
         const isSelected = selectedSubjects.includes( subjectKey ) ? ' selected' : '';
-        subjectFilter.innerHTML += `<option value="${subjectKey}"${isSelected}>${subjectLabel}</option>`;
-    } );
+        return `<option value="${escapeHtmlAttribute(subjectKey)}"${isSelected}>${escapeHtml(subjectLabel)}</option>`;
+    } ).join( '' );
+    
     if ( selectedSubjects.length === 0 ) {
         subjectFilter.selectedIndex = -1;
     }
 
+    // 4. Call createCheckboxDropdown() afterward
     createCheckboxDropdown( 'classFilter', 'Select Classes' );
     createCheckboxDropdown( 'teacherFilter', 'Select Teachers' );
     createCheckboxDropdown( 'subjectFilter', 'Select Subjects' );
@@ -6168,52 +6188,56 @@ function updateClassFilters() {
 function renderTimetable() {
     const timetableDisplay = document.getElementById( 'timetableDisplay' );
 
-    if ( !state.timetableData ) {
+    if ( !state.timetableData || Object.keys(state.timetableData).length === 0 ) {
         timetableDisplay.innerHTML = `
-                    <div class="empty-state">
-                        <i class="fas fa-calendar-alt"></i>
-                        <h3>No Timetable Loaded</h3>
-                        <p>Upload a timetable using the "Upload Timetable" tab to view it here.</p>
-                        <button class="btn btn-primary" id="goToUploadBtn">
-                            <i class="fas fa-file-upload"></i> Go to Upload
-                        </button>
-                    </div>
-                `;
-        document.getElementById( 'goToUploadBtn' ).addEventListener( 'click', function () {
-            document.querySelector( '.tab[data-target="upload-timetable-section"]' ).click();
+            <div class="empty-state">
+                <i class="fas fa-calendar-alt"></i>
+                <h3>No Timetable Loaded</h3>
+                <p>Upload a timetable using the "Upload Timetable" tab to view it here.</p>
+                <button class="btn btn-primary" id="goToUploadBtn">
+                    <i class="fas fa-file-upload"></i> Go to Upload
+                </button>
+            </div>
+        `;
+        document.getElementById( 'goToUploadBtn' )?.addEventListener( 'click', () => {
+            document.querySelector( '.tab[data-target="upload-timetable-section"]' )?.click();
         } );
         return;
     }
 
-    // Get filter values
-    const classFilters = getMultiSelectValues( 'classFilter' );
-    const teacherFilters = getMultiSelectValues( 'teacherFilter' );
-    const subjectFilters = getMultiSelectValues( 'subjectFilter' );
-
     let html = '';
 
-    if ( state.currentView === 'class' ) {
-        // Show class-wise timetable
-        const classesToShow = classFilters.length > 0 ? classFilters : Object.keys( state.timetableData );
-
-        classesToShow.forEach( className => {
-            const classData = state.timetableData[className];
-            if ( !isValidTimetableClassData( classData ) ) return;
-
-            html += `<h3 style="margin: 20px 0 10px 15px;">${className}</h3>`;
-            html += generateTimetableHTML( classData );
-        } );
-    } else if ( state.currentView === 'teacher' ) {
-        // Show teacher-wise timetable
-        html = generateTeacherTimetableHTML( teacherFilters );
-    } else if ( state.currentView === 'subject' ) {
-        // Show subject-wise timetable
-        html = generateSubjectTimetableHTML( subjectFilters );
+    switch ( state.currentView ) {
+        case 'class':
+            const classFilters = getMultiSelectValues( 'classFilter' );
+            const classesToShow = classFilters.length > 0 ? classFilters : Object.keys( state.timetableData );
+            html = classesToShow.map( className => {
+                const classData = state.timetableData[className];
+                if ( !isValidTimetableClassData( classData ) ) return '';
+                return `
+                    <h3 style="margin: 20px 0 10px 15px;">${escapeHtml(className)}</h3>
+                    ${generateTimetableHTML( classData )}
+                `;
+            }).join('');
+            break;
+            
+        case 'teacher':
+            const teacherFilters = getMultiSelectValues( 'teacherFilter' );
+            html = renderTeacherTimetableHTML( teacherFilters );
+            break;
+            
+        case 'subject':
+            const subjectFilters = getMultiSelectValues( 'subjectFilter' );
+            html = renderSubjectTimetableHTML( subjectFilters );
+            break;
+            
+        default:
+            html = '<div class="empty-state"><p>Please select a valid view mode.</p></div>';
+            break;
     }
 
     timetableDisplay.innerHTML = html;
     
-    // Add click listeners for any edit icons rendered in the timetable
     if ( typeof addEditListeners === 'function' ) {
         addEditListeners();
     }
@@ -6289,19 +6313,19 @@ function generateTimetableHTML( classData ) {
                 let cellClassExtension = '';
 
                 if ( isRealBreakPeriod( period ) ) {
-                    subjectHtmlText = '<div class="period-subject">BREAK</div>';
-                    teacherHtmlText = '<div class="period-teacher">No Teacher</div>';
+                    subjectHtmlText = `<div class="period-subject">BREAK</div>`;
+                    teacherHtmlText = `<div class="period-teacher">No Teacher</div>`;
                     cellClassExtension = 'break-cell';
                 } else if ( !hasSubject && !hasTeacher ) {
-                    subjectHtmlText = '<div class="period-subject">UNFILLED</div>';
-                    teacherHtmlText = '<div class="period-teacher">No Teacher</div>';
+                    subjectHtmlText = `<div class="period-subject">UNFILLED</div>`;
+                    teacherHtmlText = `<div class="period-teacher">No Teacher</div>`;
                 } else {
                     subjectHtmlText = hasSubject
                         ? `<div class="period-subject">${period.subject}</div>`
-                        : '<div class="period-subject subject-missing" title="No subject assigned" aria-label="No subject assigned">🟡</div>';
+                        : `<div class="period-subject subject-missing" title="No subject assigned" aria-label="No subject assigned">🟡</div>`;
                     teacherHtmlText = hasTeacher
                         ? `<div class="period-teacher">${period.teacherName}</div>`
-                        : '<div class="period-teacher">No Teacher</div>';
+                        : `<div class="period-teacher">No Teacher</div>`;
                 }
 
                 html += `
@@ -6332,20 +6356,17 @@ function generateTimetableHTML( classData ) {
 }
 
 // Generate teacher timetable HTML
-function generateTeacherTimetableHTML( teacherFilters ) {
+function renderTeacherTimetableHTML( teacherFilters ) {
     if ( !teacherFilters || teacherFilters.length === 0 ) {
         return '<div class="empty-state"><p>Please select one or more teachers to view their schedules.</p></div>';
     }
 
     if ( !state.timetableData ) return '<p>No timetable data.</p>';
 
-    let html = '';
-    teacherFilters.forEach( teacherFilter => {
+    return teacherFilters.map( teacherFilter => {
         const dayOrder = getAllActiveDays();
         const teacherGrid = {};
-        dayOrder.forEach( day => {
-            teacherGrid[day] = {};
-        } );
+        dayOrder.forEach( day => { teacherGrid[day] = {}; } );
 
         let maxPeriods = 0;
         let hasAnyEntry = false;
@@ -6369,62 +6390,55 @@ function generateTeacherTimetableHTML( teacherFilters ) {
         } );
 
         if ( !hasAnyEntry ) {
-            html += `<div class="empty-state"><p>No schedule found for teacher: ${teacherFilter}</p></div>`;
-            return;
+            return `<div class="empty-state"><p>No schedule found for teacher: ${escapeHtml(teacherFilter)}</p></div>`;
         }
 
-        html += `<h3 style="margin: 20px 0 10px 15px;">Schedule for ${teacherFilter}</h3>`;
-        html += '<table class="timetable">';
-        html += '<thead><tr><th>Day/Period</th>';
-        for ( let i = 1; i <= maxPeriods; i++ ) {
+        let maxPeriodsArray = Array.from({length: maxPeriods}, (_, i) => i + 1);
+
+        const headerHtml = maxPeriodsArray.map( i => {
             const headerTime = getPeriodTime( i );
-            html += `<th><div>P${i}</div><div class="period-header-time">${headerTime}</div></th>`;
-        }
+            return `<th><div>P${i}</div><div class="period-header-time">${headerTime}</div></th>`;
+        }).join('');
 
-        html += '</tr></thead><tbody>';
-
-        dayOrder.forEach( dayName => {
-            html += `<tr><td style="font-weight: 600; background-color: #f9f9f9;">${dayName}</td>`;
-
-            for ( let p = 1; p <= maxPeriods; p++ ) {
+        const bodyHtml = dayOrder.map( dayName => {
+            const rowCells = maxPeriodsArray.map( p => {
                 const entries = ( teacherGrid[dayName] && teacherGrid[dayName][p] ) ? teacherGrid[dayName][p] : [];
                 let periodInfo = '';
 
                 if ( entries.length > 0 ) {
                     const periodText = entries.map( entry =>
-                        `${entry.className}: ${entry.subject || '<span class="no-subject-marker" title="No subject assigned" aria-label="No subject assigned">🟡</span>'}`
+                        `${escapeHtml(entry.className)}: ${entry.subject ? escapeHtml(entry.subject) : `<span class="no-subject-marker" title="No subject assigned" aria-label="No subject assigned">🟡</span>`}`
                     ).join( '<br>' );
 
-                    periodInfo = `
-                                <div class="period-subject">${periodText}</div>
-                            `;
+                    periodInfo = `<div class="period-subject">${periodText}</div>`;
                 }
 
-                html += `<td class="period-cell">${periodInfo}</td>`;
-            }
+                return `<td class="period-cell">${periodInfo}</td>`;
+            }).join('');
 
-            html += '</tr>';
-        } );
+            return `<tr><td style="font-weight: 600; background-color: #f9f9f9;">${dayName}</td>${rowCells}</tr>`;
+        }).join('');
 
-        html += '</tbody></table>';
-    } );
-
-    return html;
+        return `
+            <h3 style="margin: 20px 0 10px 15px;">Schedule for ${escapeHtml(teacherFilter)}</h3>
+            <table class="timetable">
+                <thead><tr><th>Day/Period</th>${headerHtml}</tr></thead>
+                <tbody>${bodyHtml}</tbody>
+            </table>
+        `;
+    } ).join('');
 }
 
 // Generate subject timetable HTML
-function generateSubjectTimetableHTML( subjectFilterKeys ) {
+function renderSubjectTimetableHTML( subjectFilterKeys ) {
     if ( !subjectFilterKeys || subjectFilterKeys.length === 0 ) {
         return '<div class="empty-state"><p>Please select one or more subjects to view schedules.</p></div>';
     }
 
     if ( !state.timetableData ) return '<p>No timetable data.</p>';
 
-    let html = '';
-    subjectFilterKeys.forEach( subjectFilterKey => {
+    return subjectFilterKeys.map( subjectFilterKey => {
         const subjectLabel = getUniqueSubjectMap().get( subjectFilterKey ) || subjectFilterKey;
-
-        // Find all classes where this subject is taught
         const subjectClasses = {};
         const classNames = Object.keys( state.timetableData );
 
@@ -6441,55 +6455,38 @@ function generateSubjectTimetableHTML( subjectFilterKeys ) {
             } );
         } );
 
-        if ( Object.keys( subjectClasses ).length === 0 ) {
-            html += `<div class="empty-state"><p>No schedule found for subject: ${subjectLabel}</p></div>`;
-            return;
+        const classes = Object.keys( subjectClasses );
+        if ( classes.length === 0 ) {
+            return `<div class="empty-state"><p>No schedule found for subject: ${escapeHtml(subjectLabel)}</p></div>`;
         }
 
-        html += `<h3 style="margin: 20px 0 10px 15px;">Schedule for ${subjectLabel}</h3>`;
-        html += '<table class="timetable">';
-        html += '<thead><tr><th>Day/Period</th>';
-
-        // Get all classes where this subject is taught
-        const classes = Object.keys( subjectClasses );
-
-        classes.forEach( className => {
-            html += `<th>${className}</th>`;
-        } );
-
-        html += '</tr></thead><tbody>';
-
-        // Data rows
+        const headerHtml = classes.map( className => `<th>${escapeHtml(className)}</th>` ).join('');
         const dayOrder = getAllActiveDays();
 
-        dayOrder.forEach( dayName => {
-            html += `<tr><td style="font-weight: 600; background-color: #f9f9f9;">${dayName}</td>`;
-
-            classes.forEach( className => {
+        const bodyHtml = dayOrder.map( dayName => {
+            const rowCells = classes.map( className => {
                 const dayPeriods = subjectClasses[className][dayName] || [];
                 let periodInfo = '';
 
                 if ( dayPeriods.length > 0 ) {
-                    // Show all periods for this subject in this class on this day
-                    const periodText = dayPeriods.map( p =>
-                        `P${p.period}: ${p.teacherName}`
-                    ).join( '<br>' );
-
-                    periodInfo = `
-                                <div class="period-subject">${periodText}</div>
-                            `;
+                    const periodText = dayPeriods.map( p => `P${p.period}: ${escapeHtml(p.teacherName)}` ).join( '<br>' );
+                    periodInfo = `<div class="period-subject">${periodText}</div>`;
                 }
 
-                html += `<td class="period-cell">${periodInfo}</td>`;
-            } );
+                return `<td class="period-cell">${periodInfo}</td>`;
+            }).join('');
 
-            html += '</tr>';
-        } );
+            return `<tr><td style="font-weight: 600; background-color: #f9f9f9;">${dayName}</td>${rowCells}</tr>`;
+        }).join('');
 
-        html += '</tbody></table>';
-    } );
-
-    return html;
+        return `
+            <h3 style="margin: 20px 0 10px 15px;">Schedule for ${escapeHtml(subjectLabel)}</h3>
+            <table class="timetable">
+                <thead><tr><th>Day/Period</th>${headerHtml}</tr></thead>
+                <tbody>${bodyHtml}</tbody>
+            </table>
+        `;
+    } ).join('');
 }
 
 // Check if a date is a holiday
@@ -6662,11 +6659,6 @@ async function runOverlapCheckWithProgress() {
     }
 }
 
-function escapeCSVField( value ) {
-    const stringValue = String( value ?? '' );
-    const escapedValue = stringValue.replace( /"/g, '""' );
-    return `"${escapedValue}"`;
-}
 
 async function exportOverlapsCSV() {
     if ( !state.timetableData ) {
@@ -6718,13 +6710,13 @@ async function exportOverlapsCSV() {
         let csv = 'Class,Day,Period,Teacher,Subject,Time,Conflict Details\n';
         overlapRows.forEach( row => {
             csv += [
-                escapeCSVField( row.className ),
-                escapeCSVField( row.day ),
-                escapeCSVField( row.period ),
-                escapeCSVField( row.teacher ),
-                escapeCSVField( row.subject ),
-                escapeCSVField( row.time ),
-                escapeCSVField( row.overlapInfo )
+                escapeCsvField( row.className ),
+                escapeCsvField( row.day ),
+                escapeCsvField( row.period ),
+                escapeCsvField( row.teacher ),
+                escapeCsvField( row.subject ),
+                escapeCsvField( row.time ),
+                escapeCsvField( row.overlapInfo )
             ].join( ',' ) + '\n';
         } );
 
@@ -7727,31 +7719,31 @@ function checkLabViolations() {
 
     for ( const [className, classData] of Object.entries( state.timetableData ) ) {
         ( classData.days || [] ).forEach( day => {
-            const cscPeriods = ( day.periods || [] ).filter( p => toCleanString( p.subject ).toUpperCase() === 'CSC' );
-            if ( cscPeriods.length === 0 ) return;
+            const cslPeriods = ( day.periods || [] ).filter( p => toCleanString( p.subject ).toUpperCase() === 'CSL' );
+            if ( cslPeriods.length === 0 ) return;
 
-            cscPeriods.forEach( p => {
+            cslPeriods.forEach( p => {
                 const periodNum = p.period;
                 let isValid = false;
 
                 if ( periodNum === 1 ) {
                     const p2 = day.periods.find( x => x.period === 2 );
-                    if ( p2 && toCleanString( p2.subject ).toUpperCase() === 'CSC' ) {
+                    if ( p2 && toCleanString( p2.subject ).toUpperCase() === 'CSL' ) {
                         isValid = true;
                     }
                 } else if ( periodNum === 2 ) {
                     const p1 = day.periods.find( x => x.period === 1 );
-                    if ( p1 && toCleanString( p1.subject ).toUpperCase() === 'CSC' ) {
+                    if ( p1 && toCleanString( p1.subject ).toUpperCase() === 'CSL' ) {
                         isValid = true;
                     }
                 } else if ( periodNum === 5 ) {
                     const p6 = day.periods.find( x => x.period === 6 );
-                    if ( p6 && toCleanString( p6.subject ).toUpperCase() === 'CSC' ) {
+                    if ( p6 && toCleanString( p6.subject ).toUpperCase() === 'CSL' ) {
                         isValid = true;
                     }
                 } else if ( periodNum === 6 ) {
                     const p5 = day.periods.find( x => x.period === 5 );
-                    if ( p5 && toCleanString( p5.subject ).toUpperCase() === 'CSC' ) {
+                    if ( p5 && toCleanString( p5.subject ).toUpperCase() === 'CSL' ) {
                         isValid = true;
                     }
                 }
@@ -7856,7 +7848,7 @@ function generateGenerationReport() {
         passedChecks.push( "Teacher conflict check passed: No teacher overlaps detected." );
     }
     if ( labViolations.length === 0 ) {
-        passedChecks.push( "Lab block validation passed: All CSC periods scheduled in valid consecutive blocks." );
+        passedChecks.push( "Lab block validation passed: All CSL periods scheduled in valid consecutive blocks." );
     }
     if ( workloads.length === 0 ) {
         passedChecks.push( "Teacher workload check passed: No teachers exceed their workload limits." );
